@@ -99,14 +99,16 @@ if __name__ == '__main__':
         gene_id = row['Approved symbol'].upper()
         if gene_id in row_to_HuProt_map.keys():
             assert len(row_to_HuProt_map[gene_id]['all']) > 0
-            df_gene_protein.loc[idx, 'HuProt_all'] = np.mean(row_to_HuProt_map[gene_id]['all'])
 
+            # NOTE: Using the 99th percentile for HuProt score.
+            df_gene_protein.loc[idx, 'HuProt_all'] = np.percentile(row_to_HuProt_map[gene_id]['all'], 99)
             if len(row_to_HuProt_map[gene_id]['LC']) > 0:
-                df_gene_protein.loc[idx, 'HuProt_LC'] = np.mean(row_to_HuProt_map[gene_id]['LC'])
+                df_gene_protein.loc[idx, 'HuProt_LC'] = np.percentile(row_to_HuProt_map[gene_id]['LC'], 99)
             if len(row_to_HuProt_map[gene_id]['HC']) > 0:
-                df_gene_protein.loc[idx, 'HuProt_HC'] = np.mean(row_to_HuProt_map[gene_id]['HC'])
+                df_gene_protein.loc[idx, 'HuProt_HC'] = np.percentile(row_to_HuProt_map[gene_id]['HC'], 99)
             if len(row_to_HuProt_map[gene_id]['CVC']) > 0:
-                df_gene_protein.loc[idx, 'HuProt_CVC'] = np.mean(row_to_HuProt_map[gene_id]['CVC'])
+                df_gene_protein.loc[idx, 'HuProt_CVC'] = np.percentile(row_to_HuProt_map[gene_id]['CVC'], 99)
+
 
     # 3. Annotate the protein using the protein atlas.
     protein_class_list = []
