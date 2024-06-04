@@ -110,8 +110,8 @@ if __name__ == '__main__':
 
     # 3. Annotate the protein using the protein atlas.
     protein_class_list = []
-    for i in range(len(df_gene_protein)):
-        symbol = df_gene_protein.loc[i, 'Approved symbol']
+    for _, row in df_gene_protein.iterrows():
+        symbol = row['Approved symbol']
         try:
             protein_class = df_protein_atlas.loc[df_protein_atlas['Gene'] == symbol, 'Protein class'].item()
         except:
@@ -119,7 +119,7 @@ if __name__ == '__main__':
         protein_class_list.append(protein_class)
     df_gene_protein['Protein class'] = protein_class_list
 
-
+    # Display the unique letters for the protein sequences.
     unique_letters = set()
     for seq in df_gene_protein['Sequence']:
         for letter in seq:
