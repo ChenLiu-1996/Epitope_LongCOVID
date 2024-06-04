@@ -1,9 +1,7 @@
 # Epitope Prediction (Long COVID NeuroPASC Project)
-
-# LongCovid NeuroPASC
 ### Krishnaswamy Lab, Yale University
 [![Twitter](https://img.shields.io/twitter/follow/KrishnaswamyLab.svg?style=social&label=Follow)](https://twitter.com/KrishnaswamyLab)
-[![Github Stars](https://img.shields.io/github/stars/ChenLiu-1996/NeuroPASC.svg?style=social&label=Stars)](https://github.com/ChenLiu-1996/NeuroPASC/)
+[![Github Stars](https://img.shields.io/github/stars/ChenLiu-1996/Epitope_LongCOVID.svg?style=social&label=Stars)](https://github.com/ChenLiu-1996/Epitope_LongCOVID/)
 
 
 ## Repository Hierarchy
@@ -13,7 +11,7 @@
 ## Usage
 ### Preprocessing.
 In this section, we prepare the data for training and analysis.
-1. Download the patient-specific HuProt score csv files under `./data/HuProt_csv/`
+1. Download the patient-specific HuProt score csv files under `./data/HuProt_csv_by_patient/`
 2. Run the following scripts:
 ```
 cd preprocessing
