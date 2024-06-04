@@ -62,12 +62,12 @@ if __name__ == '__main__':
 
         # HuProt scores of many genes for this patient.
         df_curr_patient = pd.read_csv(csv_path)
-        df_gene_protein_gene_name_lowercase = np.array([item.lower() for item in df_gene_protein['Input'].values])
+        df_gene_protein_gene_name_uppercase = np.array([item.upper() for item in df_gene_protein['Input'].values])
 
         for idx, row in df_curr_patient.iterrows():
-            gene_id = row['Name']
-            if gene_id.lower() in df_gene_protein_gene_name_lowercase:
-                loc_match = np.argwhere(df_gene_protein_gene_name_lowercase == gene_id.lower())
+            gene_id = row['Name'].upper()
+            if gene_id in df_gene_protein_gene_name_uppercase:
+                loc_match = np.argwhere(df_gene_protein_gene_name_uppercase == gene_id.upper())
 
                 if not len(loc_match) == 1 and len(loc_match[0]) == 1:
                     # Multiple sequences from the same HGNC ID.
@@ -96,8 +96,8 @@ if __name__ == '__main__':
 
     # Populate these HuProt Scores.
     for idx, row in df_gene_protein.iterrows():
-        gene_id = row['Approved symbol']
-        if gene_id.lower() in row_to_HuProt_map.keys():
+        gene_id = row['Approved symbol'].upper()
+        if gene_id in row_to_HuProt_map.keys():
             assert len(row_to_HuProt_map[gene_id]['all']) > 0
             df_gene_protein.loc[idx, 'HuProt_all'] = np.mean(row_to_HuProt_map[gene_id]['all'])
 
