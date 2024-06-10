@@ -4,7 +4,7 @@ import argparse
 import os
 import torch
 import numpy as np
-from scipy.stats import pearsonr, spearmanr
+from sklearn.metrics import roc_auc_score, accuracy_score, roc_curve
 from torch.utils.data import DataLoader
 from matplotlib import pyplot as plt
 
@@ -52,9 +52,9 @@ def main(args):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print('Using device: %s' % device)
 
-    dataset = HuProtDataset(subset=args.subset, classification=False)
+    dataset = HuProtDataset(subset=args.subset, classification=True)
 
-    model = ProtBERT(device=device, classification=False)
+    model = ProtBERT(device=device, classification=True)
     model.to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(),
@@ -76,12 +76,12 @@ def main(args):
                              shuffle=False,
                              num_workers=args.num_workers)
 
-    loss_fn = torch.nn.MSELoss()
+    loss_fn = torch.nn.BCELoss()
 
     mode_mapper = {
         'val_loss_epoch': 'min',
-        'val_pearson_R': 'max',
-        'val_spearman_R': 'max',
+        'val_acc': 'max',
+        'val_auroc': 'max',
     }
 
     if mode_mapper[args.model_saving_metric] == 'min':
@@ -100,8 +100,6 @@ def main(args):
 
         num_train_samples = 0
         for iter_idx, (symbol, sequence, y_true) in enumerate(train_loader):
-            y_true = torch.log10(y_true.float().to(device))
-
             if num_train_samples >= args.max_training_iters:
                 break
 
@@ -112,6 +110,7 @@ def main(args):
                 continue
             num_train_samples += 1
 
+            y_true = y_true.float().to(device)
             y_pred = model(sequence)
 
             loss = loss_fn(y_pred.flatten(), y_true.flatten())
@@ -134,11 +133,11 @@ def main(args):
                 y_pred_arr = np.hstack((y_pred_arr, y_pred.flatten().detach().cpu().numpy()))
 
         train_loss = train_loss / num_train_samples
-        pearson_R = pearsonr(y_true_arr, y_pred_arr)[0]
-        spearman_R = spearmanr(a=y_true_arr, b=y_pred_arr)[0]
+        acc = accuracy_score(y_true=y_true_arr > 0.5, y_pred=y_pred_arr > 0.5)
+        auroc = roc_auc_score(y_true=y_true_arr > 0.5, y_score=y_pred_arr)
 
-        log('Train [%s/%s] loss: %.3f, P.R: %.3f, S.R: %.3f'
-            % (epoch_idx + 1, args.n_epochs, train_loss, pearson_R, spearman_R),
+        log('Train [%s/%s] loss: %.3f, ACC: %.3f, AUROC: %.3f'
+            % (epoch_idx + 1, args.n_epochs, train_loss, acc, auroc),
             filepath=args.log_dir,
             to_console=False)
 
@@ -148,8 +147,6 @@ def main(args):
             num_val_samples = 0
             y_true_arr, y_pred_arr = None, None
             for (symbol, sequence, y_true) in val_loader:
-                y_true = torch.log10(y_true.float().to(device))
-
                 sequence = sequence[0]
 
                 # NOTE: sad workaround due to limited GPU memory.
@@ -157,6 +154,7 @@ def main(args):
                     continue
                 num_val_samples += 1
 
+                y_true = y_true.float().to(device)
                 y_pred = model(sequence)
 
                 loss = loss_fn(y_pred.flatten(), y_true.flatten())
@@ -170,11 +168,11 @@ def main(args):
                     y_pred_arr = np.hstack((y_pred_arr, y_pred.flatten().detach().cpu().numpy()))
 
             val_loss = val_loss / num_val_samples
-            pearson_R = pearsonr(y_true_arr, y_pred_arr)[0]
-            spearman_R = spearmanr(a=y_true_arr, b=y_pred_arr)[0]
+            acc = accuracy_score(y_true=y_true_arr > 0.5, y_pred=y_pred_arr > 0.5)
+            auroc = roc_auc_score(y_true=y_true_arr > 0.5, y_score=y_pred_arr)
 
-            log('Validation [%s/%s] loss: %.3f, P.R: %.3f, S.R: %.3f'
-                % (epoch_idx + 1, args.n_epochs, val_loss, pearson_R, spearman_R),
+            log('Validation [%s/%s] loss: %.3f, ACC: %.3f, AUROC: %.3f'
+                % (epoch_idx + 1, args.n_epochs, val_loss, acc, auroc),
                 filepath=args.log_dir,
                 to_console=False)
 
@@ -184,14 +182,14 @@ def main(args):
                 torch.save(model.state_dict(), args.model_save_path)
                 log('Saving best model (based on %s) to %s.' % (args.model_saving_metric, args.model_save_path),
                     filepath=args.log_dir)
-            elif args.model_saving_metric == 'val_pearson_R' and pearson_R > best_metric:
-                best_metric = pearson_R
+            elif args.model_saving_metric == 'val_acc' and acc > best_metric:
+                best_metric = acc
                 os.makedirs(os.path.dirname(args.model_save_path), exist_ok=True)
                 torch.save(model.state_dict(), args.model_save_path)
                 log('Saving best model (based on %s) to %s.' % (args.model_saving_metric, args.model_save_path),
                     filepath=args.log_dir)
-            elif args.model_saving_metric == 'val_spearman_R' and spearman_R > best_metric:
-                best_metric = spearman_R
+            elif args.model_saving_metric == 'val_auroc' and auroc > best_metric:
+                best_metric = auroc
                 os.makedirs(os.path.dirname(args.model_save_path), exist_ok=True)
                 torch.save(model.state_dict(), args.model_save_path)
                 log('Saving best model (based on %s) to %s.' % (args.model_saving_metric, args.model_save_path),
@@ -207,7 +205,6 @@ def main(args):
         num_test_samples = 0
         y_true_arr, y_pred_arr = None, None
         for (symbol, sequence, y_true) in test_loader:
-            y_true = torch.log10(y_true.float().to(device))
             sequence = sequence[0]
 
             # NOTE: sad workaround due to limited GPU memory.
@@ -215,6 +212,7 @@ def main(args):
                 continue
             num_test_samples += 1
 
+            y_true = y_true.float().to(device)
             y_pred = model(sequence)
 
             loss = loss_fn(y_pred.flatten(), y_true.flatten())
@@ -228,32 +226,32 @@ def main(args):
                 y_pred_arr = np.hstack((y_pred_arr, y_pred.flatten().detach().cpu().numpy()))
 
         test_loss = test_loss / num_test_samples
-        pearson_R, pearson_P = pearsonr(y_true_arr, y_pred_arr)
-        spearman_R, spearman_P = spearmanr(a=y_true_arr, b=y_pred_arr)
+        acc = accuracy_score(y_true=y_true_arr > 0.5, y_pred=y_pred_arr > 0.5)
+        auroc = roc_auc_score(y_true=y_true_arr > 0.5, y_score=y_pred_arr)
 
-        log('Test loss: %.3f, P.R: %.3f, S.R: %.3f' % (test_loss, pearson_R, spearman_R),
+        log('Test loss: %.3f, ACC: %.3f, AUROC: %.3f' % (test_loss, acc, auroc),
             filepath=args.log_dir,
             to_console=False)
 
     plt.rcParams['font.family'] = 'serif'
     fig = plt.figure(figsize=(10, 8))
-    fig.suptitle('HuProt score prediction (test set)', fontsize=20)
+    fig.suptitle('HuProt classification (test set)', fontsize=20)
     ax = fig.add_subplot(1, 1, 1)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.scatter(y_true_arr, y_pred_arr,
-               marker='o', facecolors='skyblue', edgecolors='black', alpha=0.5, s=80)
-    # Best Line Fit.
-    coefficients = np.polyfit(y_true_arr, y_pred_arr, 1)
-    polynomial = np.poly1d(coefficients)
-    x_fit = np.linspace(y_true_arr.min(), y_true_arr.max(), 1000)
-    y_fit = polynomial(x_fit)
-    ax.plot(x_fit, y_fit, color='black', linestyle=':')
-    ax.set_xlabel('log10( Ground Truth HuProt scores )', fontsize=18)
-    ax.set_ylabel('log10( Predicted HuProt scores )', fontsize=18)
-    ax.set_title('Pearson R = %.3f (p = %.3f), Spearman R = %.3f (p = %.3f)' % (
-        pearson_R, pearson_P, spearman_R, spearman_P
-    ), fontsize=15)
+
+    fpr, tpr, _ = roc_curve(y_true_arr, y_pred_arr)
+    ax.plot(fpr, tpr, label='Ours (AUROC = %.3f)' % (auroc), color='firebrick')
+
+    # Plot the by-chance AUROC.
+    ax.plot(np.linspace(0, 1, 100),
+            np.linspace(0, 1, 100),
+            label='Chance (AUROC = 0.5)', linestyle=':', color='gray')
+    ax.set_xlabel('False Positive Rate', fontsize=16)
+    ax.set_ylabel('True Positive Rate', fontsize=16)
+
+    ax.legend(loc='lower right')
+
     ax.tick_params(axis='both', labelsize=15)
     fig.tight_layout(pad=2)
     fig_save_path = args.save_folder + 'HuProt_score_test.png'
@@ -278,11 +276,11 @@ if __name__ == '__main__':
     parser.add_argument("--n-epochs", default=100, type=int)
     parser.add_argument("--max-seq-length", default=1024, type=int)  # due to limited GPU memory
 
-    parser.add_argument("--output-save-folder", default='../results/HuProt_regression/', type=str)
+    parser.add_argument("--output-save-folder", default='../results/HuProt_classification/', type=str)
     parser.add_argument("--run-count", default=None, type=int)
 
     # Monitor checkpoint
-    parser.add_argument("--model-saving-metric", default='val_loss_epoch', type=str)
+    parser.add_argument("--model-saving-metric", default='val_auroc', type=str)
 
     # ---------------------------
     # CLI ARGS

@@ -1,5 +1,6 @@
 import re
 import torch
+import numpy as np
 from transformers import BertConfig, BertModel, BertTokenizer
 
 
@@ -12,16 +13,16 @@ class Regressor(torch.nn.Module):
         Batch size is 1 because the input sequence has variable length.
         '''
 
-        self.fc1 = torch.nn.Linear(latent_dim, 256)
-        self.norm1 = torch.nn.LayerNorm(256)
-        self.fc2 = torch.nn.Linear(256, 64)
-        self.norm2 = torch.nn.LayerNorm(64)
-        self.fc3 = torch.nn.Linear(64, 1)
-        self.nonlin = torch.nn.LeakyReLU(negative_slope=0.1)
+        self.fc1 = torch.nn.Linear(latent_dim, latent_dim)
+        self.norm1 = torch.nn.LayerNorm(latent_dim)
+        self.fc2 = torch.nn.Linear(latent_dim, int(np.sqrt(latent_dim)))
+        self.norm2 = torch.nn.LayerNorm(int(np.sqrt(latent_dim)))
+        self.fc3 = torch.nn.Linear(int(np.sqrt(latent_dim)), 1)
+        self.nonlin = torch.nn.LeakyReLU()
 
     def forward(self, z):
-        h = self.nonlin(self.norm1(self.fc1(z)))
-        h = self.nonlin(self.norm2(self.fc2(h)))
+        h = self.norm1(self.nonlin(self.fc1(z)))
+        h = self.norm2(self.nonlin(self.fc2(h)))
         y_pred = self.fc3(h)
         return y_pred
 
@@ -67,6 +68,6 @@ class ProtBERT(torch.nn.Module):
         y_pred = self.model(**encoded_input)
 
         if self.classification:
-            y_pred = torch.nn.functional.sigmoid(y_pred)
+            y_pred = torch.sigmoid(y_pred)
 
         return y_pred

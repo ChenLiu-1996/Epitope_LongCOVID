@@ -12,14 +12,18 @@
 ### Preprocessing.
 In this section, we prepare the data for training and analysis.
 1. Download the patient-specific HuProt score csv files under `./data/HuProt_csv_by_patient/`
-2. Run the following scripts:
+2. Run the following script:
 ```
+cd src/preprocessing
+python step01_preprocess_data.py
+```
+<!-- ```
 cd preprocessing
 python step01_extract_gene_IDs.py
 python step02_extract_protein_IDs.py
 python step03_map_protein_sequence.py
 ```
-**Note:** There are action items to perform in between these scripts. These action items are described **inside** the respective scripts. These are mainly accessing some online databases and downloading the queried results. For each script, you need to complete these action items prior to running the next script.
+**Note:** There are action items to perform in between these scripts. These action items are described **inside** the respective scripts. These are mainly accessing some online databases and downloading the queried results. For each script, you need to complete these action items prior to running the next script. -->
 
 
 <!-- ### Misc: ProtBERT embedding.
