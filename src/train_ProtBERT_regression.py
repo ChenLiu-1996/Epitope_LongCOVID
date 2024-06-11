@@ -54,7 +54,7 @@ def main(args):
 
     dataset = HuProtDataset(subset=args.subset, classification=False)
 
-    model = ProtBERT(device=device, classification=False)
+    model = ProtBERT(device=device)
     model.to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(),

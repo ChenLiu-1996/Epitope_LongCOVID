@@ -4,6 +4,8 @@ import argparse
 import os
 import torch
 import numpy as np
+
+from torchvision.ops.focal_loss import sigmoid_focal_loss
 from sklearn.metrics import roc_auc_score, accuracy_score, roc_curve
 from torch.utils.data import DataLoader
 from matplotlib import pyplot as plt
@@ -54,7 +56,7 @@ def main(args):
 
     dataset = HuProtDataset(subset=args.subset, classification=True)
 
-    model = ProtBERT(device=device, classification=True)
+    model = ProtBERT(device=device)
     model.to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(),
@@ -76,7 +78,7 @@ def main(args):
                              shuffle=False,
                              num_workers=args.num_workers)
 
-    loss_fn = torch.nn.BCELoss()
+    loss_fn = sigmoid_focal_loss
 
     mode_mapper = {
         'val_loss_epoch': 'min',
@@ -111,9 +113,10 @@ def main(args):
             num_train_samples += 1
 
             y_true = y_true.float().to(device)
-            y_pred = model(sequence)
+            y_pred_logit = model(sequence)
+            y_pred = torch.sigmoid(y_pred_logit)
 
-            loss = loss_fn(y_pred.flatten(), y_true.flatten())
+            loss = loss_fn(y_pred_logit.flatten(), y_true.flatten())
             train_loss += loss.item()
 
             # Train loss aggregation to simulate the target batch size.
@@ -155,9 +158,10 @@ def main(args):
                 num_val_samples += 1
 
                 y_true = y_true.float().to(device)
-                y_pred = model(sequence)
+                y_pred_logit = model(sequence)
+                y_pred = torch.sigmoid(y_pred_logit)
 
-                loss = loss_fn(y_pred.flatten(), y_true.flatten())
+                loss = loss_fn(y_pred_logit.flatten(), y_true.flatten())
                 val_loss += loss.item()
 
                 if y_true_arr is None:
@@ -213,9 +217,10 @@ def main(args):
             num_test_samples += 1
 
             y_true = y_true.float().to(device)
-            y_pred = model(sequence)
+            y_pred_logit = model(sequence)
+            y_pred = torch.sigmoid(y_pred_logit)
 
-            loss = loss_fn(y_pred.flatten(), y_true.flatten())
+            loss = loss_fn(y_pred_logit.flatten(), y_true.flatten())
             test_loss += loss.item()
 
             if y_true_arr is None:
