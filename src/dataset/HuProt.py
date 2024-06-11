@@ -25,7 +25,6 @@ class HuProtDataset(Dataset):
     def _prepare_data(self):
         df_gene_protein = pd.read_csv(self.data_csv)
 
-        symbols = df_gene_protein['Approved symbol'].tolist()
         sequences = df_gene_protein['Sequence'].tolist()
         if self.subset is None:
             HuProt_scores = df_gene_protein['HuProt_all'].tolist()
@@ -39,11 +38,10 @@ class HuProtDataset(Dataset):
             raise ValueError(
                 'HuProtDataset: `subset` has to be one of `LC`, `HC`, `CVC` or None. Got %s instead.' % self.subset)
 
-        symbols = np.array(symbols)
         sequences = np.array(sequences)
         HuProt_scores = np.array(HuProt_scores)
 
-        assert symbols.shape == sequences.shape and symbols.shape == HuProt_scores.shape
+        assert sequences.shape == HuProt_scores.shape
 
         # Remove the entries with NaN HuProt scores.
         nan_indices = np.argwhere(np.isnan(HuProt_scores))
@@ -52,10 +50,9 @@ class HuProtDataset(Dataset):
             assert nan_indices.shape[1] == 1
             nan_indices = nan_indices.flatten()
 
-            mask = np.ones(symbols.size, dtype=bool)
+            mask = np.ones(len(sequences), dtype=bool)
             mask[nan_indices] = False
 
-            symbols = symbols[mask]
             sequences = sequences[mask]
             HuProt_scores = HuProt_scores[mask]
 
@@ -64,16 +61,14 @@ class HuProtDataset(Dataset):
         else:
             HuProt_scores = np.array(HuProt_scores)
 
-        self.symbols = symbols
         self.sequences = sequences
         self.HuProt_scores = HuProt_scores
 
     def __len__(self) -> int:
-        return len(self.symbols)
+        return len(self.sequences)
 
     def __getitem__(self, idx) -> Tuple:
-        symbol = self.symbols[idx]
         sequence = self.sequences[idx]
         HuProt_score = self.HuProt_scores[idx]
 
-        return symbol, sequence, HuProt_score
+        return sequence, HuProt_score

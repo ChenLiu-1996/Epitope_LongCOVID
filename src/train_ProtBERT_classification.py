@@ -99,7 +99,7 @@ def main(args):
         model.train()
 
         num_train_samples = 0
-        for iter_idx, (symbol, sequence, y_true) in enumerate(train_loader):
+        for iter_idx, (sequence, y_true) in enumerate(train_loader):
             if num_train_samples >= args.max_training_iters:
                 break
 
@@ -146,7 +146,7 @@ def main(args):
             val_loss = 0
             num_val_samples = 0
             y_true_arr, y_pred_arr = None, None
-            for (symbol, sequence, y_true) in val_loader:
+            for (sequence, y_true) in val_loader:
                 sequence = sequence[0]
 
                 # NOTE: sad workaround due to limited GPU memory.
@@ -204,7 +204,7 @@ def main(args):
         test_loss = 0
         num_test_samples = 0
         y_true_arr, y_pred_arr = None, None
-        for (symbol, sequence, y_true) in test_loader:
+        for (sequence, y_true) in test_loader:
             sequence = sequence[0]
 
             # NOTE: sad workaround due to limited GPU memory.
