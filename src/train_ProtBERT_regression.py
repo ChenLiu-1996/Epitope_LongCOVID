@@ -21,7 +21,13 @@ def parse_settings(args):
         subset_str = 'all'
     else:
         subset_str = args.subset
-    output_save_path = args.output_save_folder + '/' + subset_str
+
+    setting_str = 'lr-%s_iter-%s_layer-%s_seed_%d' % (
+        args.lr, args.max_training_iters, args.num_bert_layers, args.random_seed
+    )
+
+    output_save_path = '%s/%s/%s' % (
+        args.output_save_folder, subset_str, setting_str)
 
     existing_runs = glob(output_save_path + '/run_*/')
     if len(existing_runs) > 0:
@@ -54,7 +60,7 @@ def main(args):
 
     dataset = HuProtDataset(subset=args.subset, classification=False)
 
-    model = ProtBERT(device=device)
+    model = ProtBERT(device=device, num_bert_layers=args.num_bert_layers)
     model.to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(),
@@ -272,6 +278,7 @@ if __name__ == '__main__':
     parser.add_argument("--max-training-iters", default=2048, type=int)
     parser.add_argument("--num-workers", default=4, type=int)
     parser.add_argument("--random-seed", default=1, type=int)
+    parser.add_argument("--num-bert-layers", default=None, type=int)
 
     parser.add_argument("--lr", default=1e-5, type=float)
     parser.add_argument("--wd", default=1e-3, type=float)
