@@ -15,7 +15,7 @@ from tqdm import tqdm
 if __name__ == '__main__':
 
     per_patient_csv_list = glob('../../data/HuProt_csv_by_patient/*.csv')
-    sequence_mapping_excel_path = './Pilot_Raw_IgG.xlsx'
+    sequence_mapping_excel_path = '../../data/Pilot_Raw_IgG.xlsx'
 
     output_csv_path = '../../data/HuProt_summary/HuProt_summary.csv'
     os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)

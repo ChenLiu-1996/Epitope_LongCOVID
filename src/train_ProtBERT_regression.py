@@ -97,8 +97,6 @@ def main(args):
 
     #
     for epoch_idx in tqdm(range(args.n_epochs)):
-        model.train()
-
         train_loss = 0
         y_true_arr, y_pred_arr = None, None
         optimizer.zero_grad()
@@ -285,7 +283,7 @@ if __name__ == '__main__':
     parser.add_argument("--n-epochs", default=100, type=int)
     parser.add_argument("--max-seq-length", default=1024, type=int)  # due to limited GPU memory
 
-    parser.add_argument("--output-save-folder", default='../results/HuProt_regression/', type=str)
+    parser.add_argument("--output-save-folder", default='../results/ProtBERT_HuProt_regression/', type=str)
     parser.add_argument("--run-count", default=None, type=int)
 
     # Monitor checkpoint

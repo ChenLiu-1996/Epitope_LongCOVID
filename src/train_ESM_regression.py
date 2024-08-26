@@ -4,14 +4,14 @@ import argparse
 import os
 import torch
 import numpy as np
-
-from torchvision.ops.focal_loss import sigmoid_focal_loss
-from sklearn.metrics import roc_auc_score, accuracy_score, roc_curve
+from scipy.stats import pearsonr, spearmanr
 from torch.utils.data import DataLoader
 from matplotlib import pyplot as plt
+import phate
+import scprep
 
 from dataset.HuProt import HuProtDataset
-from nn.protbert import ProtBERT
+from nn.esm import ESM
 from utils.log import log
 from utils.seed import seed_everything
 from utils.split import split_dataset
@@ -24,25 +24,24 @@ def parse_settings(args):
     else:
         subset_str = args.subset
 
-    setting_str = 'lr-%s_iter-%s_layer-%s_focalalpha-%s_focalgamma-%s_seed_%d' % (
-        args.lr, args.max_training_iters, args.num_bert_layers, args.focal_alpha, args.focal_gamma, args.random_seed
+    setting_str = 'lr-%s_iter-%s_layer-%s_seed_%d' % (
+        args.lr, args.max_training_iters, args.num_esm_layers, args.random_seed
     )
 
-    output_save_path = '%s/%s/%s' % (
-        args.output_save_folder, subset_str, setting_str)
+    output_save_path = os.path.join(args.output_save_folder, subset_str, setting_str)
 
-    existing_runs = glob(output_save_path + '/run_*/')
+    existing_runs = glob(os.path.join(output_save_path, 'run_*/'))
     if len(existing_runs) > 0:
         run_counts = [int(item.split('/')[-2].split('run_')[1]) for item in existing_runs]
         run_count = max(run_counts) + 1
     else:
         run_count = 1
 
-    args.save_folder = '%s/run_%d/' % (output_save_path, run_count)
-    args.model_save_path = args.save_folder + '/model_best_%s.pty' % args.model_saving_metric
+    args.save_folder = os.path.join(output_save_path, 'run_%d/' % run_count)
+    args.model_save_path = os.path.join(args.save_folder, 'model_best_%s.pty' % args.model_saving_metric)
 
     # Initialize log file.
-    args.log_dir = args.save_folder + 'log.txt'
+    args.log_dir = os.path.join(args.save_folder, 'log.txt')
 
     log_str = 'Config: \n'
     print(args)
@@ -60,9 +59,12 @@ def main(args):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print('Using device: %s' % device)
 
-    dataset = HuProtDataset(subset=args.subset, classification=True)
+    dataset = HuProtDataset(subset=args.subset, classification=False)
 
-    model = ProtBERT(device=device, num_bert_layers=args.num_bert_layers)
+    model = ESM(device=device,
+                num_esm_layers=args.num_esm_layers,
+                # mask_ratio=args.mask_ratio
+                )
     model.to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(),
@@ -84,12 +86,13 @@ def main(args):
                              shuffle=False,
                              num_workers=args.num_workers)
 
-    loss_fn = sigmoid_focal_loss
+    loss_fn_pred = torch.nn.MSELoss()
 
     mode_mapper = {
         'val_loss_epoch': 'min',
-        'val_acc': 'max',
-        'val_auroc': 'max',
+        'val_pearson_R': 'max',
+        'val_spearman_R': 'max',
+        'val_recon_acc': 'max',
     }
 
     if mode_mapper[args.model_saving_metric] == 'min':
@@ -97,7 +100,7 @@ def main(args):
     elif mode_mapper[args.model_saving_metric] == 'max':
         best_metric = -np.inf
 
-    #
+    # NOTE: Training.
     for epoch_idx in tqdm(range(args.n_epochs)):
         train_loss = 0
         y_true_arr, y_pred_arr = None, None
@@ -106,6 +109,8 @@ def main(args):
 
         num_train_samples = 0
         for iter_idx, (sequence, y_true) in enumerate(train_loader):
+            y_true = torch.log10(y_true.float().to(device))
+
             if num_train_samples >= args.max_training_iters:
                 break
 
@@ -116,14 +121,8 @@ def main(args):
                 continue
             num_train_samples += 1
 
-            y_true = y_true.float().to(device)
-            y_pred_logit = model(sequence)
-            y_pred = torch.sigmoid(y_pred_logit)
-
-            loss = loss_fn(y_pred_logit.flatten(),
-                           y_true.flatten(),
-                           alpha=args.focal_alpha,
-                           gamma=args.focal_gamma)
+            y_pred = model(sequence)
+            loss = loss_fn_pred(y_pred.flatten(), y_true.flatten())
             train_loss += loss.item()
 
             # Train loss aggregation to simulate the target batch size.
@@ -143,20 +142,24 @@ def main(args):
                 y_pred_arr = np.hstack((y_pred_arr, y_pred.flatten().detach().cpu().numpy()))
 
         train_loss = train_loss / num_train_samples
-        acc = accuracy_score(y_true=y_true_arr > 0.5, y_pred=y_pred_arr > 0.5)
-        auroc = roc_auc_score(y_true=y_true_arr > 0.5, y_score=y_pred_arr)
+        pearson_R = pearsonr(y_true_arr, y_pred_arr)[0]
+        spearman_R = spearmanr(a=y_true_arr, b=y_pred_arr)[0]
 
-        log('Train [%s/%s] loss: %.3f, ACC: %.3f, AUROC: %.3f'
-            % (epoch_idx + 1, args.n_epochs, train_loss, acc, auroc),
+        log('Train [%s/%s] loss (recon): %.3f, P.R: %.3f, S.R: %.3f'
+            % (epoch_idx + 1, args.n_epochs, train_loss, pearson_R, spearman_R),
             filepath=args.log_dir,
             to_console=False)
 
+        # NOTE: Validation.
         with torch.no_grad():
             model.eval()
             val_loss = 0
             num_val_samples = 0
             y_true_arr, y_pred_arr = None, None
+
             for (sequence, y_true) in val_loader:
+                y_true = torch.log10(y_true.float().to(device))
+
                 sequence = sequence[0]
 
                 # NOTE: sad workaround due to limited GPU memory.
@@ -164,11 +167,8 @@ def main(args):
                     continue
                 num_val_samples += 1
 
-                y_true = y_true.float().to(device)
-                y_pred_logit = model(sequence)
-                y_pred = torch.sigmoid(y_pred_logit)
-
-                loss = loss_fn(y_pred_logit.flatten(), y_true.flatten())
+                y_pred = model(sequence)
+                loss = loss_fn_pred(y_pred.flatten(), y_true.flatten())
                 val_loss += loss.item()
 
                 if y_true_arr is None:
@@ -179,11 +179,11 @@ def main(args):
                     y_pred_arr = np.hstack((y_pred_arr, y_pred.flatten().detach().cpu().numpy()))
 
             val_loss = val_loss / num_val_samples
-            acc = accuracy_score(y_true=y_true_arr > 0.5, y_pred=y_pred_arr > 0.5)
-            auroc = roc_auc_score(y_true=y_true_arr > 0.5, y_score=y_pred_arr)
+            pearson_R = pearsonr(y_true_arr, y_pred_arr)[0]
+            spearman_R = spearmanr(a=y_true_arr, b=y_pred_arr)[0]
 
-            log('Validation [%s/%s] loss: %.3f, ACC: %.3f, AUROC: %.3f'
-                % (epoch_idx + 1, args.n_epochs, val_loss, acc, auroc),
+            log('Validation [%s/%s] loss (recon): %.3f, P.R: %.3f, S.R: %.3f'
+                % (epoch_idx + 1, args.n_epochs, val_loss, pearson_R, spearman_R),
                 filepath=args.log_dir,
                 to_console=False)
 
@@ -193,14 +193,14 @@ def main(args):
                 torch.save(model.state_dict(), args.model_save_path)
                 log('Saving best model (based on %s) to %s.' % (args.model_saving_metric, args.model_save_path),
                     filepath=args.log_dir)
-            elif args.model_saving_metric == 'val_acc' and acc > best_metric:
-                best_metric = acc
+            elif args.model_saving_metric == 'val_pearson_R' and pearson_R > best_metric:
+                best_metric = pearson_R
                 os.makedirs(os.path.dirname(args.model_save_path), exist_ok=True)
                 torch.save(model.state_dict(), args.model_save_path)
                 log('Saving best model (based on %s) to %s.' % (args.model_saving_metric, args.model_save_path),
                     filepath=args.log_dir)
-            elif args.model_saving_metric == 'val_auroc' and auroc > best_metric:
-                best_metric = auroc
+            elif args.model_saving_metric == 'val_spearman_R' and spearman_R > best_metric:
+                best_metric = spearman_R
                 os.makedirs(os.path.dirname(args.model_save_path), exist_ok=True)
                 torch.save(model.state_dict(), args.model_save_path)
                 log('Saving best model (based on %s) to %s.' % (args.model_saving_metric, args.model_save_path),
@@ -215,7 +215,9 @@ def main(args):
         test_loss = 0
         num_test_samples = 0
         y_true_arr, y_pred_arr = None, None
+
         for (sequence, y_true) in test_loader:
+            y_true = torch.log10(y_true.float().to(device))
             sequence = sequence[0]
 
             # NOTE: sad workaround due to limited GPU memory.
@@ -223,11 +225,8 @@ def main(args):
                 continue
             num_test_samples += 1
 
-            y_true = y_true.float().to(device)
-            y_pred_logit = model(sequence)
-            y_pred = torch.sigmoid(y_pred_logit)
-
-            loss = loss_fn(y_pred_logit.flatten(), y_true.flatten())
+            y_pred = model(sequence)
+            loss = loss_fn_pred(y_pred.flatten(), y_true.flatten())
             test_loss += loss.item()
 
             if y_true_arr is None:
@@ -238,36 +237,38 @@ def main(args):
                 y_pred_arr = np.hstack((y_pred_arr, y_pred.flatten().detach().cpu().numpy()))
 
         test_loss = test_loss / num_test_samples
-        acc = accuracy_score(y_true=y_true_arr > 0.5, y_pred=y_pred_arr > 0.5)
-        auroc = roc_auc_score(y_true=y_true_arr > 0.5, y_score=y_pred_arr)
+        pearson_R, pearson_P = pearsonr(y_true_arr, y_pred_arr)
+        spearman_R, spearman_P = spearmanr(a=y_true_arr, b=y_pred_arr)
 
-        log('Test loss: %.3f, ACC: %.3f, AUROC: %.3f' % (test_loss, acc, auroc),
+        log('Test loss (recon): %.3f, P.R: %.3f, S.R: %.3f' % (
+            test_loss, pearson_R, spearman_R),
             filepath=args.log_dir,
             to_console=False)
 
     plt.rcParams['font.family'] = 'serif'
     fig = plt.figure(figsize=(10, 8))
-    fig.suptitle('HuProt classification (test set)', fontsize=20)
+    fig.suptitle('HuProt score prediction (test set)', fontsize=20)
     ax = fig.add_subplot(1, 1, 1)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-
-    fpr, tpr, _ = roc_curve(y_true_arr, y_pred_arr)
-    ax.plot(fpr, tpr, label='Ours (AUROC = %.3f)' % (auroc), color='firebrick')
-
-    # Plot the by-chance AUROC.
-    ax.plot(np.linspace(0, 1, 100),
-            np.linspace(0, 1, 100),
-            label='Chance (AUROC = 0.5)', linestyle=':', color='gray')
-    ax.set_xlabel('False Positive Rate', fontsize=16)
-    ax.set_ylabel('True Positive Rate', fontsize=16)
-
-    ax.legend(loc='lower right')
-
+    ax.scatter(y_true_arr, y_pred_arr,
+               marker='o', facecolors='skyblue', edgecolors='black', alpha=0.5, s=80)
+    # Best Line Fit.
+    coefficients = np.polyfit(y_true_arr, y_pred_arr, 1)
+    polynomial = np.poly1d(coefficients)
+    x_fit = np.linspace(y_true_arr.min(), y_true_arr.max(), 1000)
+    y_fit = polynomial(x_fit)
+    ax.plot(x_fit, y_fit, color='black', linestyle=':')
+    ax.set_xlabel('log10( Ground Truth HuProt scores )', fontsize=18)
+    ax.set_ylabel('log10( Predicted HuProt scores )', fontsize=18)
+    ax.set_title('Pearson R = %.3f (p = %.3f), Spearman R = %.3f (p = %.3f)' % (
+        pearson_R, pearson_P, spearman_R, spearman_P
+    ), fontsize=15)
     ax.tick_params(axis='both', labelsize=15)
     fig.tight_layout(pad=2)
-    fig_save_path = args.save_folder + 'HuProt_score_test.png'
+    fig_save_path = os.path.join(args.save_folder, 'HuProt_score_test.png')
     fig.savefig(fig_save_path)
+    plt.close(fig)
     return
 
 
@@ -282,20 +283,20 @@ if __name__ == '__main__':
     parser.add_argument("--max-training-iters", default=2048, type=int)
     parser.add_argument("--num-workers", default=4, type=int)
     parser.add_argument("--random-seed", default=1, type=int)
-    parser.add_argument("--num-bert-layers", default=None, type=int)
-    parser.add_argument("--focal-alpha", default=0.25, type=float)
-    parser.add_argument("--focal-gamma", default=2.0, type=float)
+    parser.add_argument("--num-esm-layers", default=None, type=int)
 
     parser.add_argument("--lr", default=1e-5, type=float)
     parser.add_argument("--wd", default=1e-3, type=float)
-    parser.add_argument("--n-epochs", default=100, type=int)
+    parser.add_argument("--n-epochs", default=50, type=int)
     parser.add_argument("--max-seq-length", default=1024, type=int)  # due to limited GPU memory
+    # parser.add_argument("--mask-ratio", default=0.2, type=float)
+    # parser.add_argument("--coeff-recon", default=1e-1, type=float)
 
-    parser.add_argument("--output-save-folder", default='../results/ProtBERT_HuProt_classification/', type=str)
+    parser.add_argument("--output-save-folder", default='../results/ESM_HuProt_regression/', type=str)
     parser.add_argument("--run-count", default=None, type=int)
 
     # Monitor checkpoint
-    parser.add_argument("--model-saving-metric", default='val_auroc', type=str)
+    parser.add_argument("--model-saving-metric", default='val_loss_epoch', type=str)
 
     # ---------------------------
     # CLI ARGS
