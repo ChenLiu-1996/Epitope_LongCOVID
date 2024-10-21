@@ -31,15 +31,6 @@ class ESM(torch.nn.Module):
 
         encoded_input = self.tokenizer(seq, return_tensors='pt')
         encoded_input = encoded_input.to(self.device)
-        # seq_tokens = encoded_input.input_ids.clone()
-
-        # if self.mask_ratio > 0:
-        #     num_to_mask = int(np.ceil(self.mask_ratio * seq_tokens.size(-1)))
-        #     eligible_indices = np.arange(1, seq_tokens.size(-1) - 1)  # Avoid [CLS] and [SEP]
-        #     masked_indices = np.random.choice(eligible_indices, size=num_to_mask, replace=False)
-        #     for idx in masked_indices:
-        #         # Replace token with [MASK] token id
-        #         encoded_input.input_ids[0, idx] = self.tokenizer.mask_token_id
 
         outputs = self.encoder_classifier.esm(**encoded_input)
         hidden_state = outputs.last_hidden_state
@@ -48,6 +39,23 @@ class ESM(torch.nn.Module):
         y_pred_logit = self.encoder_classifier.classifier(hidden_state)
 
         return y_pred_logit
+
+    def output_attentions(self, seq):
+        # Format the protein sequence.
+        seq = re.sub(r'[UZOB]', 'X', seq)
+        seq = ' '.join(seq)
+
+        encoded_input = self.tokenizer(seq, return_tensors='pt')
+        encoded_input = encoded_input.to(self.device)
+
+        outputs = self.encoder_classifier.esm(**encoded_input, output_attentions=True)
+        hidden_state = outputs.last_hidden_state
+        attentions = outputs.attentions
+
+        # NOTE: Prediction head.
+        y_pred_logit = self.encoder_classifier.classifier(hidden_state)
+
+        return y_pred_logit, attentions
 
     def predict_prob(self, seq):
         y_pred_logit = self.forward(seq)

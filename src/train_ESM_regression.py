@@ -17,6 +17,34 @@ from utils.seed import seed_everything
 from utils.split import split_dataset
 
 
+def attention_rollout(attentions, discard_ratio=0.95, head_fusion='max'):
+    result = torch.eye(attentions[0].size(-1))
+    with torch.no_grad():
+        for attention in attentions:
+            if head_fusion == "mean":
+                attention_heads_fused = attention.mean(axis=1)
+            elif head_fusion == "max":
+                attention_heads_fused = attention.max(axis=1)[0]
+            elif head_fusion == "min":
+                attention_heads_fused = attention.min(axis=1)[0]
+            else:
+                raise "Attention head fusion type Not supported"
+
+            # Drop the lowest attentions, but don't drop the class token.
+            flat = attention_heads_fused.view(attention_heads_fused.size(0), -1)
+            _, indices = flat.topk(int(flat.size(-1) * discard_ratio), -1, False)
+            indices = indices[indices != 0]
+            flat[0, indices] = 0
+
+            I = torch.eye(attention_heads_fused.size(-1))
+            a = (attention_heads_fused + 1.0 * I) / 2
+            a = a / a.sum(dim=-1)
+
+            result = torch.matmul(a, result)
+
+    return result
+
+
 def parse_settings(args):
     # Initialize save folder.
     if args.subset is None:
@@ -63,7 +91,6 @@ def main(args):
 
     model = ESM(device=device,
                 num_esm_layers=args.num_esm_layers,
-                # mask_ratio=args.mask_ratio
                 )
     model.to(device)
 
@@ -215,6 +242,7 @@ def main(args):
         test_loss = 0
         num_test_samples = 0
         y_true_arr, y_pred_arr = None, None
+        sequence_list, attribution_list = [], []
 
         for (sequence, y_true) in test_loader:
             y_true = torch.log10(y_true.float().to(device))
@@ -225,7 +253,21 @@ def main(args):
                 continue
             num_test_samples += 1
 
-            y_pred = model(sequence)
+            y_pred, attentions = model.output_attentions(sequence)
+            attention_rolled = attention_rollout(attentions)
+            final_attribution = torch.sum(attention_rolled, dim=-1)
+
+            batch_size = final_attribution.shape[0]
+            assert batch_size == 1
+            final_attribution = final_attribution.flatten().cpu().detach().numpy().tolist()
+            final_attribution = [np.round(item, 4) for item in final_attribution]
+            # Drop START and END tokens.
+            final_attribution = final_attribution[1:-1]
+            assert len(final_attribution) == len(sequence)
+
+            sequence_list.append(sequence)
+            attribution_list.append(final_attribution)
+
             loss = loss_fn_pred(y_pred.flatten(), y_true.flatten())
             test_loss += loss.item()
 
@@ -269,6 +311,61 @@ def main(args):
     fig_save_path = os.path.join(args.save_folder, 'HuProt_score_test.png')
     fig.savefig(fig_save_path)
     plt.close(fig)
+
+    # NOTE: plotting the attention attributions.
+    # Top k highest true HuProt score.
+    # Top k lowest true HuProt score.
+    # Top k highest predicted HuProt score.
+    # Top k lowest predicted HuProt score.
+    topk = 10
+
+    fig = plt.figure(figsize=(30, 15))
+    gs = plt.GridSpec(2 * topk + 1, 2, width_ratios=[95, 5])
+    indices = np.argsort(y_true_arr)[-topk:][::-1]
+    for row_idx, item_idx in enumerate(indices):
+        ax = fig.add_subplot(gs[row_idx, 0])
+        cbar_data = ax.imshow([attribution_list[item_idx]], cmap='inferno', clim=[0, 2.0])
+        ax.set_yticks([])
+        ax.set_xticks(ticks=np.arange(len(sequence_list[item_idx])), labels=list(sequence_list[item_idx]), fontsize=6, rotation=0)
+        ax.set_title(f'True HuProt score: {y_true_arr[item_idx]:.2f}, Pred HuProt score: {y_pred_arr[item_idx]:.2f}')
+    indices = np.argsort(y_true_arr)[:topk]
+    for row_idx, item_idx in enumerate(indices):
+        ax = fig.add_subplot(gs[topk + 1 + row_idx, 0])
+        cbar_data = ax.imshow([attribution_list[item_idx]], cmap='inferno', clim=[0, 2.0])
+        ax.set_yticks([])
+        ax.set_xticks(ticks=np.arange(len(sequence_list[item_idx])), labels=list(sequence_list[item_idx]), fontsize=6, rotation=0)
+        ax.set_title(f'True HuProt score: {y_true_arr[item_idx]:.2f}, Pred HuProt score: {y_pred_arr[item_idx]:.2f}')
+    ax_colorbar = fig.add_subplot(gs[:, 1])
+    fig.colorbar(cbar_data, ax=ax_colorbar, orientation='vertical', aspect=90)
+    ax_colorbar.set_axis_off()
+    fig_save_path = os.path.join(args.save_folder, 'Attention_Attribution_topk_true_HuProt_score.png')
+    fig.tight_layout(pad=2)
+    fig.savefig(fig_save_path)
+    plt.close(fig)
+
+    fig = plt.figure(figsize=(30, 15))
+    gs = plt.GridSpec(2 * topk + 1, 2, width_ratios=[95, 5])
+    indices = np.argsort(y_pred_arr)[-topk:][::-1]
+    for row_idx, item_idx in enumerate(indices):
+        ax = fig.add_subplot(gs[row_idx, 0])
+        cbar_data = ax.imshow([attribution_list[item_idx]], cmap='inferno', clim=[0, 2.0])
+        ax.set_yticks([])
+        ax.set_xticks(ticks=np.arange(len(sequence_list[item_idx])), labels=list(sequence_list[item_idx]), fontsize=6, rotation=0)
+        ax.set_title(f'True HuProt score: {y_true_arr[item_idx]:.2f}, Pred HuProt score: {y_pred_arr[item_idx]:.2f}')
+    indices = np.argsort(y_pred_arr)[:topk]
+    for row_idx, item_idx in enumerate(indices):
+        ax = fig.add_subplot(gs[topk + 1 + row_idx, 0])
+        cbar_data = ax.imshow([attribution_list[item_idx]], cmap='inferno', clim=[0, 2.0])
+        ax.set_yticks([])
+        ax.set_xticks(ticks=np.arange(len(sequence_list[item_idx])), labels=list(sequence_list[item_idx]), fontsize=6, rotation=0)
+        ax.set_title(f'True HuProt score: {y_true_arr[item_idx]:.2f}, Pred HuProt score: {y_pred_arr[item_idx]:.2f}')
+    ax_colorbar = fig.add_subplot(gs[:, 1])
+    fig.colorbar(cbar_data, ax=ax_colorbar, orientation='vertical', aspect=90)
+    ax_colorbar.set_axis_off()
+    fig_save_path = os.path.join(args.save_folder, 'Attention_Attribution_topk_pred_HuProt_score.png')
+    fig.tight_layout(pad=2)
+    fig.savefig(fig_save_path)
+    plt.close(fig)
     return
 
 
@@ -279,18 +376,16 @@ if __name__ == '__main__':
     # data argmuments
     parser.add_argument("--subset", default=None, type=str)
 
-    parser.add_argument("--batch-size", default=16, type=int)
-    parser.add_argument("--max-training-iters", default=2048, type=int)
+    parser.add_argument("--batch-size", default=32, type=int)
+    parser.add_argument("--max-training-iters", default=4096, type=int)
     parser.add_argument("--num-workers", default=4, type=int)
     parser.add_argument("--random-seed", default=1, type=int)
     parser.add_argument("--num-esm-layers", default=None, type=int)
 
-    parser.add_argument("--lr", default=1e-5, type=float)
-    parser.add_argument("--wd", default=1e-3, type=float)
+    parser.add_argument("--lr", default=1e-4, type=float)
+    parser.add_argument("--wd", default=1e-4, type=float)
     parser.add_argument("--n-epochs", default=50, type=int)
-    parser.add_argument("--max-seq-length", default=1024, type=int)  # due to limited GPU memory
-    # parser.add_argument("--mask-ratio", default=0.2, type=float)
-    # parser.add_argument("--coeff-recon", default=1e-1, type=float)
+    parser.add_argument("--max-seq-length", default=512, type=int)  # due to limited GPU memory
 
     parser.add_argument("--output-save-folder", default='../results/ESM_HuProt_regression/', type=str)
     parser.add_argument("--run-count", default=None, type=int)

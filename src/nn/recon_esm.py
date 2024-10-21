@@ -52,11 +52,6 @@ class ReconESM(torch.nn.Module):
         seq = re.sub(r'[UZOB]', 'X', seq)
         seq = ' '.join(seq)
 
-        if len(seq) > self.max_seq_len:
-            print('\n\nWTF? seq len exceeded?')
-            print('max seq len:', self.max_seq_len)
-            print('seq len:', len(seq))
-
         encoded_input = self.tokenizer(seq, return_tensors='pt')
         encoded_input = encoded_input.to(self.device)
         seq_tokens = encoded_input.input_ids.clone()
