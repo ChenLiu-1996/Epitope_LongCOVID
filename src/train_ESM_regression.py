@@ -4,17 +4,17 @@ import argparse
 import os
 import torch
 import numpy as np
+import pandas as pd
 from scipy.stats import pearsonr, spearmanr
 from torch.utils.data import DataLoader
 from matplotlib import pyplot as plt
-import phate
-import scprep
 
 from dataset.HuProt import HuProtDataset
 from nn.esm import ESM
 from utils.log import log
 from utils.seed import seed_everything
 from utils.split import split_dataset
+from utils.scheduler import LinearWarmupCosineAnnealingLR
 
 
 def attention_rollout(attentions, discard_ratio=0.95, head_fusion='max'):
@@ -97,6 +97,10 @@ def main(args):
     optimizer = torch.optim.AdamW(model.parameters(),
                                   lr=args.lr,
                                   weight_decay=args.wd)
+    scheduler = LinearWarmupCosineAnnealingLR(optimizer,
+                                              warmup_epochs=args.n_epochs//4,
+                                              warmup_start_lr=args.lr/1000,
+                                              max_epochs=args.n_epochs)
 
     train_set, val_set, test_set = split_dataset(dataset, splits=(0.8, 0.1, 0.1), random_seed=1)
 
@@ -171,6 +175,7 @@ def main(args):
         train_loss = train_loss / num_train_samples
         pearson_R = pearsonr(y_true_arr, y_pred_arr)[0]
         spearman_R = spearmanr(a=y_true_arr, b=y_pred_arr)[0]
+        scheduler.step()
 
         log('Train [%s/%s] loss (recon): %.3f, P.R: %.3f, S.R: %.3f'
             % (epoch_idx + 1, args.n_epochs, train_loss, pearson_R, spearman_R),
@@ -254,12 +259,13 @@ def main(args):
             num_test_samples += 1
 
             y_pred, attentions = model.output_attentions(sequence)
+            attentions = [item.cpu() for item in attentions]
             attention_rolled = attention_rollout(attentions)
             final_attribution = torch.sum(attention_rolled, dim=-1)
 
             batch_size = final_attribution.shape[0]
             assert batch_size == 1
-            final_attribution = final_attribution.flatten().cpu().detach().numpy().tolist()
+            final_attribution = final_attribution.flatten().detach().numpy().tolist()
             final_attribution = [np.round(item, 4) for item in final_attribution]
             # Drop START and END tokens.
             final_attribution = final_attribution[1:-1]
@@ -366,6 +372,16 @@ def main(args):
     fig.tight_layout(pad=2)
     fig.savefig(fig_save_path)
     plt.close(fig)
+
+    # Save the data.
+    df = pd.DataFrame({
+        'Sequence': sequence_list,
+        'Attribution': attribution_list,
+        'log10_HuProt_true': y_true_arr,
+        'log10_HuProt_pred': y_pred_arr,
+    })
+
+    df.to_csv(os.path.join(args.save_folder, 'data.csv'), index=False)
     return
 
 
@@ -376,14 +392,14 @@ if __name__ == '__main__':
     # data argmuments
     parser.add_argument("--subset", default=None, type=str)
 
-    parser.add_argument("--batch-size", default=32, type=int)
+    parser.add_argument("--batch-size", default=64, type=int)
     parser.add_argument("--max-training-iters", default=4096, type=int)
     parser.add_argument("--num-workers", default=4, type=int)
     parser.add_argument("--random-seed", default=1, type=int)
     parser.add_argument("--num-esm-layers", default=None, type=int)
 
     parser.add_argument("--lr", default=1e-4, type=float)
-    parser.add_argument("--wd", default=1e-4, type=float)
+    parser.add_argument("--wd", default=1e-5, type=float)
     parser.add_argument("--n-epochs", default=50, type=int)
     parser.add_argument("--max-seq-length", default=512, type=int)  # due to limited GPU memory
 

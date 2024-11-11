@@ -66,6 +66,8 @@ python -m pip install bertviz
 python -m pip install jupyterlab
 python -m pip install ipywidgets
 
+python -m pip install nglview
+
 
 # If it says "version `GLIBCXX_3.4.29' not found", you can try:
 `export LD_LIBRARY_PATH=/gpfs/gibbs/pi/krishnaswamy_smita/cl2482/.conda_envs/pasc/lib/:$LD_LIBRARY_PATH`
