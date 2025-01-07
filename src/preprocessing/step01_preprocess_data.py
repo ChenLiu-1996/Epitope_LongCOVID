@@ -1,20 +1,21 @@
 '''
-We have one csv file for each patient under `ROOT/data/HuProt_csv_by_patient/`.
+We have a csv file under `ROOT/data/HuProt_batch_corrected/`.
 We also have an excel file containing protein ID to sequence mapping and protein information.
 
-This script constructs a summary csv that contains the sequence-specific category-specific HuProt scores.
+This script constructs a summary csv that contains
+1. The sequence-specific patient-specific HuProt scores.
+2. The sequence-specific category-specific HuProt scores.
 '''
 
 import os
 import numpy as np
 import pandas as pd
-from glob import glob
 from tqdm import tqdm
 
 
 if __name__ == '__main__':
 
-    per_patient_csv_list = glob('../../data/HuProt_csv_by_patient/*.csv')
+    input_csv_path = '../../data/HuProt_batch_corrected/TP_HuProt_b1b2_Lg2CPM_TMM_avg_LCIDbFull.csv'
     sequence_mapping_excel_path = '../../data/Pilot_Raw_IgG.xlsx'
 
     output_csv_path = '../../data/HuProt_summary/HuProt_summary.csv'
@@ -30,49 +31,43 @@ if __name__ == '__main__':
         sequence = row['Sequence']
         assert protein_id not in JHU_ID_to_sequence_map
         JHU_ID_to_sequence_map[protein_id] = sequence
+    del protein_id
 
-    # 2. Find all unique protein JHU IDs in per-patient csv files.
-    all_protein_JHU_ID_set = set()
-    missing_JHU_ID_set = set()
-    available_JHU_ID_set = set()
-    for csv_path in tqdm(per_patient_csv_list, desc='Finding all proteins in per-patient csv files'):
-        df = pd.read_csv(csv_path)
-        for item in df['ID'].values:
-            protein_id = item.split('.')[0]
-            if not protein_id[:3] == 'JHU':
-                continue
+    # 2. Find all unique protein JHU IDs in the batch corrected csv file.
+    all_protein_id_set = set()
+    missing_protein_id_set = set()
+    available_protein_id_set = set()
+    huprot_score_map = {}
+    df_input = pd.read_csv(input_csv_path)
+    # Proteins are the columns.
+    for item in tqdm(df_input.columns, desc='Filtering proteins without sequence information'):
+        if 'JHU' not in item:
+            continue
+        protein_id = item
+        protein_JHUID = 'JHU' + item.split('JHU')[1]
 
-            all_protein_JHU_ID_set.add(protein_id)
+        all_protein_id_set.add(protein_id)
+        if protein_JHUID not in JHU_ID_to_sequence_map.keys():
+            missing_protein_id_set.add(protein_id)
+        else:
+            available_protein_id_set.add(protein_id)
+            huprot_score_map[protein_id] = {
+                'all': [],
+                'HC': [],
+                'CVC': [],
+                'LC': [],
+            }
+    del protein_id
 
-            if protein_id not in JHU_ID_to_sequence_map.keys():
-                missing_JHU_ID_set.add(protein_id)
-            else:
-                available_JHU_ID_set.add(protein_id)
-
-    available_protein_JHU_IDs = np.unique(list(available_JHU_ID_set))
-
-    # Create the summary dataframe.
-    df_summary = pd.DataFrame({
-        'JHU ID': available_protein_JHU_IDs,
-        'Sequence': np.full(len(available_protein_JHU_IDs), np.nan),
-        'HuProt_all': np.full(len(available_protein_JHU_IDs), np.nan),
-        'HuProt_LC': np.full(len(available_protein_JHU_IDs), np.nan),
-        'HuProt_HC': np.full(len(available_protein_JHU_IDs), np.nan),
-        'HuProt_CVC': np.full(len(available_protein_JHU_IDs), np.nan),
-    })
-
-    # 3. Populate the HuProt scores (overall and by category).
+    # 3. Populate the HuProt scores (overall, by category, and by patient).
     # LC: long covid
     # HC: healthy control
     # CVC: covalence control
-    JHU_ID_to_HuProt_map = {}
-    for csv_path in tqdm(per_patient_csv_list, desc='Populating HuProt Scores'):
-        patient_filename = os.path.basename(csv_path)
-        patient_string = patient_filename.split('_')[0]
-
-        patient_is_LC = 'LC' in patient_string
-        patient_is_HC = 'HC' in patient_string
-        patient_is_CVC = 'CVC' in patient_string
+    for idx, row in tqdm(df_input.iterrows(), desc='Populating HuProt scores', total=len(df_input)):
+        patient = row['LCID_Batch']
+        patient_is_LC = 'LC' in patient
+        patient_is_HC = 'HC' in patient
+        patient_is_CVC = 'CVC' in patient
         assert patient_is_LC + patient_is_HC + patient_is_CVC == 1
         if patient_is_LC:
             patient_type = 'LC'
@@ -81,101 +76,55 @@ if __name__ == '__main__':
         elif patient_is_CVC:
             patient_type = 'CVC'
 
-        # This is the HuProt scores of many proteins for this patient.
-        df_curr_patient = pd.read_csv(csv_path)
-        all_JHU_IDs_in_df_set = set([item for item in df_summary['JHU ID'].values])
+        for protein_id in huprot_score_map.keys():
+            # Find HuProt score.
+            huprot_score = row[protein_id]
+            huprot_score_map[protein_id]['all'].append(huprot_score)
+            huprot_score_map[protein_id][patient_type].append(huprot_score)
+            huprot_score_map[protein_id][patient] = huprot_score
+    del patient, protein_id
 
-        for idx, row in df_curr_patient.iterrows():
-            protein_id = row['ID'].split('.')[0]
-            if protein_id[:3] != 'JHU':
-                continue
-            if protein_id not in all_JHU_IDs_in_df_set:
-                continue
+    # 4. Populate these HuProt Scores to `df_summary`.
+    # Create the summary dataframe.
+    available_protein_ids = np.unique(list(available_protein_id_set))
+    all_patients = df_input['LCID_Batch'].values.tolist()
+    df_summary_map = {
+        'protein_id': available_protein_ids,
+        'Sequence': np.full(len(available_protein_ids), np.nan),
+        'HuProt_all': np.full(len(available_protein_ids), np.nan),
+        'HuProt_LC': np.full(len(available_protein_ids), np.nan),
+        'HuProt_HC': np.full(len(available_protein_ids), np.nan),
+        'HuProt_CVC': np.full(len(available_protein_ids), np.nan),
+    }
+    for patient in all_patients:
+        df_summary_map[patient] = np.full(len(available_protein_ids), np.nan)
+    df_summary = pd.DataFrame(df_summary_map)
+    del df_summary_map
 
-            # Compute HuProt score.
-            huprot_score = row['F635'] - row['B635']
+    # NOTE: Using the median for HuProt score.
+    for idx, row in tqdm(df_summary.iterrows(), desc='Creating summary csv', total=len(df_summary)):
+        protein_id = row['protein_id']
+        protein_JHUID = 'JHU' + item.split('JHU')[1]
 
-            if protein_id not in JHU_ID_to_HuProt_map:
-                JHU_ID_to_HuProt_map[protein_id] = {}
-                JHU_ID_to_HuProt_map[protein_id]['all'] = []
-                JHU_ID_to_HuProt_map[protein_id]['LC'] = []
-                JHU_ID_to_HuProt_map[protein_id]['HC'] = []
-                JHU_ID_to_HuProt_map[protein_id]['CVC'] = []
+        assert protein_JHUID in JHU_ID_to_sequence_map.keys()
+        df_summary.loc[idx, 'Sequence'] = JHU_ID_to_sequence_map[protein_JHUID]
 
-            JHU_ID_to_HuProt_map[protein_id]['all'].append(huprot_score)
-            JHU_ID_to_HuProt_map[protein_id][patient_type].append(huprot_score)
+        for patient in all_patients:
+            # df_summary.loc[idx, patient] = df_input.loc[df_input['LCID_Batch'] == patient, protein_id].item()
+            df_summary.loc[idx, patient] = huprot_score_map[protein_id][patient]
 
-    mean_all, mean_LC, mean_HC, mean_CVC = 0, 0, 0, 0
-    median_all, median_LC, median_HC, median_CVC = 0, 0, 0, 0
-    pctl_75_all, pctl_75_LC, pctl_75_HC, pctl_75_CVC = 0, 0, 0, 0
-    pctl_90_all, pctl_90_LC, pctl_90_HC, pctl_90_CVC = 0, 0, 0, 0
-    pctl_95_all, pctl_95_LC, pctl_95_HC, pctl_95_CVC = 0, 0, 0, 0
-    pctl_99_all, pctl_99_LC, pctl_99_HC, pctl_99_CVC = 0, 0, 0, 0
-    max_all, max_LC, max_HC, max_CVC = 0, 0, 0, 0
+        if protein_id in huprot_score_map.keys():
+            assert len(huprot_score_map[protein_id]['all']) > 0
+            df_summary.loc[idx, 'HuProt_all'] = np.median(huprot_score_map[protein_id]['all'])
 
-    # Populate these HuProt Scores to `df_summary`.
-    # NOTE: Using the 99th percentile for HuProt score.
-    for idx, row in df_summary.iterrows():
-        protein_id = row['JHU ID'].split('.')[0]
-        if protein_id[:3] != 'JHU':
-            continue
+            if len(huprot_score_map[protein_id]['LC']) > 0:
+                df_summary.loc[idx, 'HuProt_LC'] = np.median(huprot_score_map[protein_id]['LC'])
 
-        assert protein_id in JHU_ID_to_sequence_map.keys()
-        df_summary.loc[idx, 'Sequence'] = JHU_ID_to_sequence_map[protein_id]
+            if len(huprot_score_map[protein_id]['HC']) > 0:
+                df_summary.loc[idx, 'HuProt_HC'] = np.median(huprot_score_map[protein_id]['HC'])
 
-        if protein_id in JHU_ID_to_HuProt_map.keys():
-            assert len(JHU_ID_to_HuProt_map[protein_id]['all']) > 0
-
-            mean_all += np.mean(JHU_ID_to_HuProt_map[protein_id]['all']) > 1000
-            median_all += np.median(JHU_ID_to_HuProt_map[protein_id]['all']) > 1000
-            pctl_75_all += np.percentile(JHU_ID_to_HuProt_map[protein_id]['all'], 75) > 1000
-            pctl_90_all += np.percentile(JHU_ID_to_HuProt_map[protein_id]['all'], 90) > 1000
-            pctl_95_all += np.percentile(JHU_ID_to_HuProt_map[protein_id]['all'], 95) > 1000
-            pctl_99_all += np.percentile(JHU_ID_to_HuProt_map[protein_id]['all'], 99) > 1000
-            max_all += np.max(JHU_ID_to_HuProt_map[protein_id]['all']) > 1000
-
-            df_summary.loc[idx, 'HuProt_all'] = np.percentile(JHU_ID_to_HuProt_map[protein_id]['all'], 99)
-
-            if len(JHU_ID_to_HuProt_map[protein_id]['LC']) > 0:
-                mean_LC += np.mean(JHU_ID_to_HuProt_map[protein_id]['LC']) > 1000
-                median_LC += np.median(JHU_ID_to_HuProt_map[protein_id]['LC']) > 1000
-                pctl_75_LC += np.percentile(JHU_ID_to_HuProt_map[protein_id]['LC'], 75) > 1000
-                pctl_90_LC += np.percentile(JHU_ID_to_HuProt_map[protein_id]['LC'], 90) > 1000
-                pctl_95_LC += np.percentile(JHU_ID_to_HuProt_map[protein_id]['LC'], 95) > 1000
-                pctl_99_LC += np.percentile(JHU_ID_to_HuProt_map[protein_id]['LC'], 99) > 1000
-                max_LC += np.max(JHU_ID_to_HuProt_map[protein_id]['LC']) > 1000
-
-                df_summary.loc[idx, 'HuProt_LC'] = np.percentile(JHU_ID_to_HuProt_map[protein_id]['LC'], 99)
-
-            if len(JHU_ID_to_HuProt_map[protein_id]['HC']) > 0:
-                mean_HC += np.mean(JHU_ID_to_HuProt_map[protein_id]['HC']) > 1000
-                median_HC += np.median(JHU_ID_to_HuProt_map[protein_id]['HC']) > 1000
-                pctl_75_HC += np.percentile(JHU_ID_to_HuProt_map[protein_id]['HC'], 75) > 1000
-                pctl_90_HC += np.percentile(JHU_ID_to_HuProt_map[protein_id]['HC'], 90) > 1000
-                pctl_95_HC += np.percentile(JHU_ID_to_HuProt_map[protein_id]['HC'], 95) > 1000
-                pctl_99_HC += np.percentile(JHU_ID_to_HuProt_map[protein_id]['HC'], 99) > 1000
-                max_HC += np.max(JHU_ID_to_HuProt_map[protein_id]['HC']) > 1000
-
-                df_summary.loc[idx, 'HuProt_HC'] = np.percentile(JHU_ID_to_HuProt_map[protein_id]['HC'], 99)
-
-            if len(JHU_ID_to_HuProt_map[protein_id]['CVC']) > 0:
-                mean_CVC += np.mean(JHU_ID_to_HuProt_map[protein_id]['CVC']) > 1000
-                median_CVC += np.median(JHU_ID_to_HuProt_map[protein_id]['CVC']) > 1000
-                pctl_75_CVC += np.percentile(JHU_ID_to_HuProt_map[protein_id]['CVC'], 75) > 1000
-                pctl_90_CVC += np.percentile(JHU_ID_to_HuProt_map[protein_id]['CVC'], 90) > 1000
-                pctl_95_CVC += np.percentile(JHU_ID_to_HuProt_map[protein_id]['CVC'], 95) > 1000
-                pctl_99_CVC += np.percentile(JHU_ID_to_HuProt_map[protein_id]['CVC'], 99) > 1000
-                max_CVC += np.max(JHU_ID_to_HuProt_map[protein_id]['CVC']) > 1000
-
-                df_summary.loc[idx, 'HuProt_CVC'] = np.percentile(JHU_ID_to_HuProt_map[protein_id]['CVC'], 99)
-
-    print('Mean: ', mean_all, mean_LC, mean_HC, mean_CVC)
-    print('Median: ', median_all, median_LC, median_HC, median_CVC)
-    print('75%: ', pctl_75_all, pctl_75_LC, pctl_75_HC, pctl_75_CVC)
-    print('90%: ', pctl_90_all, pctl_90_LC, pctl_90_HC, pctl_90_CVC)
-    print('95%: ', pctl_95_all, pctl_95_LC, pctl_95_HC, pctl_95_CVC)
-    print('99%: ', pctl_99_all, pctl_99_LC, pctl_99_HC, pctl_99_CVC)
-    print('Max: ', max_all, max_LC, max_HC, max_CVC)
+            if len(huprot_score_map[protein_id]['CVC']) > 0:
+                df_summary.loc[idx, 'HuProt_CVC'] = np.median(huprot_score_map[protein_id]['CVC'])
 
     # Display the unique letters for the protein sequences.
     unique_letters = set()
