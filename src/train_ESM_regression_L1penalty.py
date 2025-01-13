@@ -8,6 +8,7 @@ import pandas as pd
 from scipy.stats import pearsonr, spearmanr
 from torch.utils.data import DataLoader
 from matplotlib import pyplot as plt
+from contextlib import nullcontext
 
 from dataset.HuProt import HuProtDataset
 from nn.esm import ESM
@@ -17,9 +18,11 @@ from utils.split import split_dataset
 from utils.scheduler import LinearWarmupCosineAnnealingLR
 
 
-def attention_rollout(attentions, discard_ratio=0.95, head_fusion='max'):
-    result = torch.eye(attentions[0].size(-1))
-    with torch.no_grad():
+def attention_rollout(attentions, discard_ratio=0.95, head_fusion='max', use_grad=False):
+    result = torch.eye(attentions[0].size(-1)).to(attentions[0].device)
+
+    context = nullcontext() if use_grad is True else torch.no_grad()
+    with context:
         for attention in attentions:
             if head_fusion == "mean":
                 attention_heads_fused = attention.mean(axis=1)
@@ -36,7 +39,7 @@ def attention_rollout(attentions, discard_ratio=0.95, head_fusion='max'):
             indices = indices[indices != 0]
             flat[0, indices] = 0
 
-            I = torch.eye(attention_heads_fused.size(-1))
+            I = torch.eye(attention_heads_fused.size(-1)).to(attentions[0].device)
             a = (attention_heads_fused + 1.0 * I) / 2
             a = a / a.sum(dim=-1)
 
@@ -44,6 +47,9 @@ def attention_rollout(attentions, discard_ratio=0.95, head_fusion='max'):
 
     return result
 
+def soft_topk(x, k, temperature=1.0, dim=-1):
+    weights = torch.softmax(x / temperature, dim=-1)
+    return torch.topk(weights, k, dim=dim).values
 
 def parse_settings(args):
     # Initialize save folder.
@@ -52,8 +58,8 @@ def parse_settings(args):
     else:
         subset_str = args.subset
 
-    setting_str = 'lr-%s_iter-%s_layer-%s_seed_%d' % (
-        args.lr, args.max_training_iters, args.num_esm_layers, args.random_seed
+    setting_str = 'lr-%s_L1penalty-%s_iter-%s_layer-%s_seed_%d' % (
+        args.lr, args.L1_coeff, args.max_training_iters, args.num_esm_layers, args.random_seed
     )
 
     output_save_path = os.path.join(args.output_save_folder, subset_str, setting_str)
@@ -90,7 +96,8 @@ def main(args):
     dataset = HuProtDataset(subset=args.subset, classification=False)
 
     model = ESM(device=device,
-                num_esm_layers=args.num_esm_layers)
+                num_esm_layers=args.num_esm_layers,
+                )
     model.to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(),
@@ -151,8 +158,16 @@ def main(args):
                 continue
             num_train_samples += 1
 
-            y_pred = model(sequence)
+            y_pred, attentions = model.output_attentions(sequence)
             loss = loss_fn_pred(y_pred.flatten(), y_true.flatten())
+
+            # Additional L1 penalty.
+            attention_rolled = attention_rollout(attentions, use_grad=True)
+            final_attribution = torch.sum(attention_rolled, dim=-1)
+            # Drop START and END tokens.
+            final_attribution = final_attribution[1:-1]
+            L1_penalty = final_attribution.abs().mean()
+            loss += args.L1_coeff * L1_penalty
             train_loss += loss.item()
 
             # Train loss aggregation to simulate the target batch size.
@@ -198,8 +213,15 @@ def main(args):
                     continue
                 num_val_samples += 1
 
-                y_pred = model(sequence)
+                y_pred, attentions = model.output_attentions(sequence)
                 loss = loss_fn_pred(y_pred.flatten(), y_true.flatten())
+                # Additional L1 penalty.
+                attention_rolled = attention_rollout(attentions)
+                final_attribution = torch.sum(attention_rolled, dim=-1)
+                # Drop START and END tokens.
+                final_attribution = final_attribution[1:-1]
+                L1_penalty = final_attribution.abs().mean()
+                loss += args.L1_coeff * L1_penalty
                 val_loss += loss.item()
 
                 if y_true_arr is None:
@@ -274,6 +296,9 @@ def main(args):
             attribution_list.append(final_attribution)
 
             loss = loss_fn_pred(y_pred.flatten(), y_true.flatten())
+            # Additional L1 penalty.
+            L1_penalty = final_attribution.abs().mean()
+            loss += args.L1_coeff * L1_penalty
             test_loss += loss.item()
 
             if y_true_arr is None:
@@ -399,10 +424,11 @@ if __name__ == '__main__':
 
     parser.add_argument("--lr", default=1e-4, type=float)
     parser.add_argument("--wd", default=1e-5, type=float)
+    parser.add_argument("--L1-coeff", default=1e-1, type=float)
     parser.add_argument("--n-epochs", default=50, type=int)
     parser.add_argument("--max-seq-length", default=512, type=int)  # due to limited GPU memory
 
-    parser.add_argument("--output-save-folder", default='../results/ESM_HuProt_regression/', type=str)
+    parser.add_argument("--output-save-folder", default='../results/ESM_HuProt_regression_L1penalty/', type=str)
     parser.add_argument("--run-count", default=None, type=int)
 
     # Monitor checkpoint

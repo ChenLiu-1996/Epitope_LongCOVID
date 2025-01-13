@@ -40,11 +40,10 @@ if __name__ == '__main__':
     huprot_score_map = {}
     df_input = pd.read_csv(input_csv_path)
     # Proteins are the columns.
-    for item in tqdm(df_input.columns, desc='Filtering proteins without sequence information'):
-        if 'JHU' not in item:
+    for protein_id in tqdm(df_input.columns, desc='Filtering proteins without sequence information'):
+        if 'JHU' not in protein_id:
             continue
-        protein_id = item
-        protein_JHUID = 'JHU' + item.split('JHU')[1]
+        protein_JHUID = 'JHU' + protein_id.split('JHU')[1]
 
         all_protein_id_set.add(protein_id)
         if protein_JHUID not in JHU_ID_to_sequence_map.keys():
@@ -57,7 +56,7 @@ if __name__ == '__main__':
                 'CVC': [],
                 'LC': [],
             }
-    del protein_id
+    del protein_id, protein_JHUID
 
     # 3. Populate the HuProt scores (overall, by category, and by patient).
     # LC: long covid
@@ -104,7 +103,7 @@ if __name__ == '__main__':
     # NOTE: Using the median for HuProt score.
     for idx, row in tqdm(df_summary.iterrows(), desc='Creating summary csv', total=len(df_summary)):
         protein_id = row['protein_id']
-        protein_JHUID = 'JHU' + item.split('JHU')[1]
+        protein_JHUID = 'JHU' + protein_id.split('JHU')[1]
 
         assert protein_JHUID in JHU_ID_to_sequence_map.keys()
         df_summary.loc[idx, 'Sequence'] = JHU_ID_to_sequence_map[protein_JHUID]

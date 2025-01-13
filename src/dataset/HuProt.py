@@ -57,7 +57,7 @@ class HuProtDataset(Dataset):
             HuProt_scores = HuProt_scores[mask]
 
         if self.classification:
-            HuProt_scores = np.uint8(np.array(HuProt_scores) > 1000.0)
+            raise NotImplementedError()
         else:
             HuProt_scores = np.array(HuProt_scores)
 
