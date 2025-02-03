@@ -10,7 +10,7 @@ data_dir = '/'.join(os.path.realpath(__file__).split('/')[:-3])
 class HuProtDataset(Dataset):
     def __init__(self,
                  data_csv: str = data_dir + '/data/HuProt_summary/HuProt_summary.csv',
-                 subset: Literal['LC', 'CVC', 'HC'] = None,
+                 subset: Literal['All', 'LC', 'CVC', 'HC'] = None,
                  classification: bool = False):
         '''
         HuProt Score Prediction from sequence.
@@ -25,23 +25,22 @@ class HuProtDataset(Dataset):
     def _prepare_data(self):
         df_gene_protein = pd.read_csv(self.data_csv)
 
-        sequences = df_gene_protein['Sequence'].tolist()
+        sequences = df_gene_protein['Sequence'].to_numpy()
         if self.subset is None:
-            HuProt_scores = df_gene_protein['HuProt_all'].tolist()
+            HuProt_scores = df_gene_protein[['HuProt_LC', 'HuProt_HC', 'HuProt_CVC']].to_numpy()
+        elif self.subset == 'All':
+            HuProt_scores = df_gene_protein['HuProt_all'].to_numpy()
         elif self.subset == 'LC':
-            HuProt_scores = df_gene_protein['HuProt_LC'].tolist()
+            HuProt_scores = df_gene_protein['HuProt_LC'].to_numpy()
         elif self.subset == 'HC':
-            HuProt_scores = df_gene_protein['HuProt_HC'].tolist()
+            HuProt_scores = df_gene_protein['HuProt_HC'].to_numpy()
         elif self.subset == 'CVC':
-            HuProt_scores = df_gene_protein['HuProt_CVC'].tolist()
+            HuProt_scores = df_gene_protein['HuProt_CVC'].to_numpy()
         else:
             raise ValueError(
-                'HuProtDataset: `subset` has to be one of `LC`, `HC`, `CVC` or None. Got %s instead.' % self.subset)
+                f'HuProtDataset: `subset` has to be one of `All`, `LC`, `HC`, `CVC` or None. Got {self.subset} instead.')
 
-        sequences = np.array(sequences)
-        HuProt_scores = np.array(HuProt_scores)
-
-        assert sequences.shape == HuProt_scores.shape
+        assert sequences.shape[0] == HuProt_scores.shape[0]
 
         # Remove the entries with NaN HuProt scores.
         nan_indices = np.argwhere(np.isnan(HuProt_scores))
@@ -58,8 +57,6 @@ class HuProtDataset(Dataset):
 
         if self.classification:
             raise NotImplementedError()
-        else:
-            HuProt_scores = np.array(HuProt_scores)
 
         self.sequences = sequences
         self.HuProt_scores = HuProt_scores
@@ -72,3 +69,7 @@ class HuProtDataset(Dataset):
         HuProt_score = self.HuProt_scores[idx]
 
         return sequence, HuProt_score
+
+
+if __name__ == '__main__':
+    dataset = HuProtDataset()

@@ -17,33 +17,6 @@ from utils.split import split_dataset
 from utils.scheduler import LinearWarmupCosineAnnealingLR
 
 
-def attention_rollout(attentions, discard_ratio=0.95, head_fusion='max'):
-    result = torch.eye(attentions[0].size(-1))
-    with torch.no_grad():
-        for attention in attentions:
-            if head_fusion == "mean":
-                attention_heads_fused = attention.mean(axis=1)
-            elif head_fusion == "max":
-                attention_heads_fused = attention.max(axis=1)[0]
-            elif head_fusion == "min":
-                attention_heads_fused = attention.min(axis=1)[0]
-            else:
-                raise "Attention head fusion type Not supported"
-
-            # Drop the lowest attentions, but don't drop the class token.
-            flat = attention_heads_fused.view(attention_heads_fused.size(0), -1)
-            _, indices = flat.topk(int(flat.size(-1) * discard_ratio), -1, False)
-            indices = indices[indices != 0]
-            flat[0, indices] = 0
-
-            I = torch.eye(attention_heads_fused.size(-1))
-            a = (attention_heads_fused + 1.0 * I) / 2
-            a = a / a.sum(dim=-1)
-
-            result = torch.matmul(a, result)
-
-    return result
-
 
 def parse_settings(args):
     # Initialize save folder.
@@ -122,7 +95,6 @@ def main(args):
         'val_loss_epoch': 'min',
         'val_pearson_R': 'max',
         'val_spearman_R': 'max',
-        'val_recon_acc': 'max',
     }
 
     if mode_mapper[args.model_saving_metric] == 'min':
@@ -152,7 +124,7 @@ def main(args):
             num_train_samples += 1
 
             y_pred = model(sequence)
-            loss = loss_fn_pred(y_pred.flatten(), y_true.flatten())
+            loss = loss_fn_pred(y_pred, y_true)
             train_loss += loss.item()
 
             # Train loss aggregation to simulate the target batch size.
@@ -165,19 +137,25 @@ def main(args):
                 optimizer.zero_grad()
 
             if y_true_arr is None:
-                y_true_arr = y_true.flatten().detach().cpu().numpy()
-                y_pred_arr = y_pred.flatten().detach().cpu().numpy()
+                y_true_arr = y_true.detach().cpu().numpy()
+                y_pred_arr = y_pred.detach().cpu().numpy()
             else:
-                y_true_arr = np.hstack((y_true_arr, y_true.flatten().detach().cpu().numpy()))
-                y_pred_arr = np.hstack((y_pred_arr, y_pred.flatten().detach().cpu().numpy()))
+                y_true_arr = np.vstack((y_true_arr, y_true.detach().cpu().numpy()))
+                y_pred_arr = np.vstack((y_pred_arr, y_pred.detach().cpu().numpy()))
 
         train_loss = train_loss / num_train_samples
-        pearson_R = pearsonr(y_true_arr, y_pred_arr)[0]
-        spearman_R = spearmanr(a=y_true_arr, b=y_pred_arr)[0]
         scheduler.step()
 
-        log('Train [%s/%s] loss (recon): %.3f, P.R: %.3f, S.R: %.3f'
-            % (epoch_idx + 1, args.n_epochs, train_loss, pearson_R, spearman_R),
+        pearson_Rs, spearman_Rs = np.zeros((3,)), np.zeros((3,))
+        pearson_Rs[0] = pearsonr(y_true_arr[:, 0], y_pred_arr[:, 0])[0]
+        spearman_Rs[0] = spearmanr(a=y_true_arr[:, 0], b=y_pred_arr[:, 0])[0]
+        pearson_Rs[1] = pearsonr(y_true_arr[:, 1], y_pred_arr[:, 1])[0]
+        spearman_Rs[1] = spearmanr(a=y_true_arr[:, 1], b=y_pred_arr[:, 1])[0]
+        pearson_Rs[2] = pearsonr(y_true_arr[:, 2], y_pred_arr[:, 2])[0]
+        spearman_Rs[2] = spearmanr(a=y_true_arr[:, 2], b=y_pred_arr[:, 2])[0]
+
+        log('Train [%s/%s] loss: %.3f, P.R|S.R (LC): %.3f|%.3f, P.R|S.R (HC): %.3f|%.3f, P.R|S.R (CVC): %.3f|%.3f'
+            % (epoch_idx + 1, args.n_epochs, train_loss, pearson_Rs[0], spearman_Rs[0], pearson_Rs[1], spearman_Rs[1], pearson_Rs[2], spearman_Rs[2]),
             filepath=args.log_dir,
             to_console=False)
 
@@ -199,39 +177,48 @@ def main(args):
                 num_val_samples += 1
 
                 y_pred = model(sequence)
-                loss = loss_fn_pred(y_pred.flatten(), y_true.flatten())
+                loss = loss_fn_pred(y_pred, y_true)
                 val_loss += loss.item()
 
                 if y_true_arr is None:
-                    y_true_arr = y_true.flatten().detach().cpu().numpy()
-                    y_pred_arr = y_pred.flatten().detach().cpu().numpy()
+                    y_true_arr = y_true.detach().cpu().numpy()
+                    y_pred_arr = y_pred.detach().cpu().numpy()
                 else:
-                    y_true_arr = np.hstack((y_true_arr, y_true.flatten().detach().cpu().numpy()))
-                    y_pred_arr = np.hstack((y_pred_arr, y_pred.flatten().detach().cpu().numpy()))
+                    y_true_arr = np.vstack((y_true_arr, y_true.detach().cpu().numpy()))
+                    y_pred_arr = np.vstack((y_pred_arr, y_pred.detach().cpu().numpy()))
 
             val_loss = val_loss / num_val_samples
-            pearson_R = pearsonr(y_true_arr, y_pred_arr)[0]
-            spearman_R = spearmanr(a=y_true_arr, b=y_pred_arr)[0]
 
-            log('Validation [%s/%s] loss (recon): %.3f, P.R: %.3f, S.R: %.3f'
-                % (epoch_idx + 1, args.n_epochs, val_loss, pearson_R, spearman_R),
+            pearson_Rs, spearman_Rs = np.zeros((3,)), np.zeros((3,))
+            pearson_Rs[0] = pearsonr(y_true_arr[:, 0], y_pred_arr[:, 0])[0]
+            spearman_Rs[0] = spearmanr(a=y_true_arr[:, 0], b=y_pred_arr[:, 0])[0]
+            pearson_Rs[1] = pearsonr(y_true_arr[:, 1], y_pred_arr[:, 1])[0]
+            spearman_Rs[1] = spearmanr(a=y_true_arr[:, 1], b=y_pred_arr[:, 1])[0]
+            pearson_Rs[2] = pearsonr(y_true_arr[:, 2], y_pred_arr[:, 2])[0]
+            spearman_Rs[2] = spearmanr(a=y_true_arr[:, 2], b=y_pred_arr[:, 2])[0]
+
+            log('Validation [%s/%s] loss: %.3f, P.R|S.R (LC): %.3f|%.3f, P.R|S.R (HC): %.3f|%.3f, P.R|S.R (CVC): %.3f|%.3f'
+                % (epoch_idx + 1, args.n_epochs, val_loss, pearson_Rs[0], spearman_Rs[0], pearson_Rs[1], spearman_Rs[1], pearson_Rs[2], spearman_Rs[2]),
                 filepath=args.log_dir,
                 to_console=False)
 
-            if args.model_saving_metric == 'val_loss_epoch' and val_loss < best_metric:
+            if args.model_saving_metric == 'val_loss_epoch' \
+            and val_loss < best_metric:
                 best_metric = val_loss
                 os.makedirs(os.path.dirname(args.model_save_path), exist_ok=True)
                 torch.save(model.state_dict(), args.model_save_path)
                 log('Saving best model (based on %s) to %s.' % (args.model_saving_metric, args.model_save_path),
                     filepath=args.log_dir)
-            elif args.model_saving_metric == 'val_pearson_R' and pearson_R > best_metric:
-                best_metric = pearson_R
+            elif args.model_saving_metric == 'val_pearson_R' \
+            and pearson_Rs.mean() > best_metric:
+                best_metric = pearson_Rs.mean()
                 os.makedirs(os.path.dirname(args.model_save_path), exist_ok=True)
                 torch.save(model.state_dict(), args.model_save_path)
                 log('Saving best model (based on %s) to %s.' % (args.model_saving_metric, args.model_save_path),
                     filepath=args.log_dir)
-            elif args.model_saving_metric == 'val_spearman_R' and spearman_R > best_metric:
-                best_metric = spearman_R
+            elif args.model_saving_metric == 'val_spearman_R' \
+            and pearson_Rs.mean() > best_metric:
+                best_metric = pearson_Rs.mean()
                 os.makedirs(os.path.dirname(args.model_save_path), exist_ok=True)
                 torch.save(model.state_dict(), args.model_save_path)
                 log('Saving best model (based on %s) to %s.' % (args.model_saving_metric, args.model_save_path),
@@ -246,7 +233,7 @@ def main(args):
         test_loss = 0
         num_test_samples = 0
         y_true_arr, y_pred_arr = None, None
-        sequence_list, attribution_list = [], []
+        sequence_list, attribution_list_LC, attribution_list_HC, attribution_list_CVC = [], [], [], []
 
         for (sequence, y_true) in test_loader:
             y_true = y_true.float().to(device)
@@ -257,89 +244,109 @@ def main(args):
                 continue
             num_test_samples += 1
 
-            y_pred, attentions = model.output_attentions(sequence)
-            attentions = [item.cpu() for item in attentions]
-            attention_rolled = attention_rollout(attentions)
-            final_attribution = torch.sum(attention_rolled, dim=-1)
-
-            batch_size = final_attribution.shape[0]
-            assert batch_size == 1
-            final_attribution = final_attribution.flatten().detach().numpy().tolist()
-            final_attribution = [np.round(item, 4) for item in final_attribution]
+            token_attribution = model.output_attribution(sequence)
+            assert model.num_classes == token_attribution.shape[0]
             # Drop START and END tokens.
-            final_attribution = final_attribution[1:-1]
-            assert len(final_attribution) == len(sequence)
+            token_attribution = token_attribution[:, 1:-1]
+            assert len(sequence) == token_attribution.shape[1]
 
             sequence_list.append(sequence)
-            attribution_list.append(final_attribution)
+            attribution_list_LC.append([np.round(item, 4) for item in token_attribution[0, :]])
+            attribution_list_HC.append([np.round(item, 4) for item in token_attribution[1, :]])
+            attribution_list_CVC.append([np.round(item, 4) for item in token_attribution[2, :]])
 
-            loss = loss_fn_pred(y_pred.flatten(), y_true.flatten())
+            loss = loss_fn_pred(y_pred, y_true)
             test_loss += loss.item()
 
             if y_true_arr is None:
-                y_true_arr = y_true.flatten().detach().cpu().numpy()
-                y_pred_arr = y_pred.flatten().detach().cpu().numpy()
+                y_true_arr = y_true.detach().cpu().numpy()
+                y_pred_arr = y_pred.detach().cpu().numpy()
             else:
-                y_true_arr = np.hstack((y_true_arr, y_true.flatten().detach().cpu().numpy()))
-                y_pred_arr = np.hstack((y_pred_arr, y_pred.flatten().detach().cpu().numpy()))
+                y_true_arr = np.vstack((y_true_arr, y_true.detach().cpu().numpy()))
+                y_pred_arr = np.vstack((y_pred_arr, y_pred.detach().cpu().numpy()))
 
         test_loss = test_loss / num_test_samples
-        pearson_R, pearson_P = pearsonr(y_true_arr, y_pred_arr)
-        spearman_R, spearman_P = spearmanr(a=y_true_arr, b=y_pred_arr)
 
-        log('Test loss (recon): %.3f, P.R: %.3f, S.R: %.3f' % (
-            test_loss, pearson_R, spearman_R),
+        pearson_Rs, spearman_Rs = np.zeros((3,)), np.zeros((3,))
+        pearson_Ps, spearman_Ps = np.zeros((3,)), np.zeros((3,))
+        pearson_Rs[0], pearson_Ps[0] = pearsonr(y_true_arr[:, 0], y_pred_arr[:, 0])
+        spearman_Rs[0], spearman_Ps[0] = spearmanr(a=y_true_arr[:, 0], b=y_pred_arr[:, 0])
+        pearson_Rs[1], pearson_Ps[1] = pearsonr(y_true_arr[:, 1], y_pred_arr[:, 1])
+        spearman_Rs[1], spearman_Ps[1] = spearmanr(a=y_true_arr[:, 1], b=y_pred_arr[:, 1])
+        pearson_Rs[2], pearson_Ps[2] = pearsonr(y_true_arr[:, 2], y_pred_arr[:, 2])
+        spearman_Rs[2], spearman_Ps[2] = spearmanr(a=y_true_arr[:, 2], b=y_pred_arr[:, 2])
+
+        log('Test loss: %.3f, P.R|S.R (LC): %.3f|%.3f, P.R|S.R (HC): %.3f|%.3f, P.R|S.R (CVC): %.3f|%.3f' % (
+            test_loss, pearson_Rs[0], spearman_Rs[0], pearson_Rs[1], spearman_Rs[1], pearson_Rs[2], spearman_Rs[2]),
             filepath=args.log_dir,
             to_console=False)
 
     plt.rcParams['font.family'] = 'serif'
-    fig = plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=(26, 8))
     fig.suptitle('HuProt score prediction (test set)', fontsize=20)
-    ax = fig.add_subplot(1, 1, 1)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.scatter(y_true_arr, y_pred_arr,
-               marker='o', facecolors='skyblue', edgecolors='black', alpha=0.5, s=80)
-    # Best Line Fit.
-    coefficients = np.polyfit(y_true_arr, y_pred_arr, 1)
-    polynomial = np.poly1d(coefficients)
-    x_fit = np.linspace(y_true_arr.min(), y_true_arr.max(), 1000)
-    y_fit = polynomial(x_fit)
-    ax.plot(x_fit, y_fit, color='black', linestyle=':')
-    ax.set_xlabel('Ground Truth HuProt scores', fontsize=18)
-    ax.set_ylabel('Predicted HuProt scores', fontsize=18)
-    ax.set_title('Pearson R = %.3f (p = %.3f), Spearman R = %.3f (p = %.3f)' % (
-        pearson_R, pearson_P, spearman_R, spearman_P
-    ), fontsize=15)
-    ax.tick_params(axis='both', labelsize=15)
+    for category_idx, category_name in enumerate(['LC', 'HC', 'CVC']):
+        ax = fig.add_subplot(1, 3, category_idx + 1)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.scatter(y_true_arr[:, category_idx], y_pred_arr[:, category_idx],
+                marker='o', facecolors='skyblue', edgecolors='black', alpha=0.5, s=80)
+        # Best Line Fit.
+        coefficients = np.polyfit(y_true_arr, y_pred_arr, 1)
+        polynomial = np.poly1d(coefficients)
+        x_fit = np.linspace(y_true_arr.min(), y_true_arr.max(), 1000)
+        y_fit = polynomial(x_fit)
+        ax.plot(x_fit, y_fit, color='black', linestyle=':')
+        ax.set_xlabel(f'Ground Truth HuProt scores ({category_name})', fontsize=18)
+        ax.set_ylabel(f'Predicted HuProt scores ({category_name})', fontsize=18)
+        ax.set_title('Pearson R = %.3f (p = %.3f), Spearman R = %.3f (p = %.3f)' % (
+            pearson_Rs[category_idx], pearson_Ps[category_idx], spearman_Rs[category_idx], spearman_Ps[category_idx]
+        ), fontsize=15)
+        ax.tick_params(axis='both', labelsize=15)
     fig.tight_layout(pad=2)
     fig_save_path = os.path.join(args.save_folder, 'HuProt_score_test.png')
     fig.savefig(fig_save_path)
     plt.close(fig)
 
     # NOTE: plotting the attention attributions.
-    # Top k highest true HuProt score.
-    # Top k lowest true HuProt score.
-    # Top k highest predicted HuProt score.
-    # Top k lowest predicted HuProt score.
-    topk = 10
+    # Top k highest true LC HuProt score.
+    # Top k lowest true LC HuProt score.
+    # Top k highest predicted LC HuProt score.
+    # Top k lowest predicted LC HuProt score.
+    topk = 5
 
     fig = plt.figure(figsize=(30, 15))
-    gs = plt.GridSpec(2 * topk + 1, 2, width_ratios=[95, 5])
-    indices = np.argsort(y_true_arr)[-topk:][::-1]
+    gs = plt.GridSpec(4 * topk + 1, 2, width_ratios=[95, 5])
+    indices = np.argsort(y_true_arr[:, 0])[-topk:][::-1]
     for row_idx, item_idx in enumerate(indices):
-        ax = fig.add_subplot(gs[row_idx, 0])
-        cbar_data = ax.imshow([attribution_list[item_idx]], cmap='inferno', clim=[0, 2.0])
+        ax = fig.add_subplot(gs[row_idx * 2, 0])
+        cbar_data = ax.imshow([attribution_list_LC[item_idx] - attribution_list_HC[item_idx]], cmap='inferno', clim=[0, 2.0])
         ax.set_yticks([])
         ax.set_xticks(ticks=np.arange(len(sequence_list[item_idx])), labels=list(sequence_list[item_idx]), fontsize=6, rotation=0)
-        ax.set_title(f'True HuProt score: {y_true_arr[item_idx]:.2f}, Pred HuProt score: {y_pred_arr[item_idx]:.2f}')
-    indices = np.argsort(y_true_arr)[:topk]
-    for row_idx, item_idx in enumerate(indices):
-        ax = fig.add_subplot(gs[topk + 1 + row_idx, 0])
-        cbar_data = ax.imshow([attribution_list[item_idx]], cmap='inferno', clim=[0, 2.0])
+        ax.set_title(f'True HuProt score (LC|HC|CVC): {y_true_arr[item_idx, 0]:.2f}|{y_true_arr[item_idx, 1]:.2f}|{y_true_arr[item_idx, 2]:.2f}, ' + \
+                     f'Pred HuProt score (LC|HC|CVC): {y_pred_arr[item_idx, 0]:.2f}|{y_pred_arr[item_idx, 1]:.2f}|{y_pred_arr[item_idx, 2]:.2f}' + \
+                     '\nLC - HC')
+        ax = fig.add_subplot(gs[row_idx * 2 + 1, 0])
+        cbar_data = ax.imshow([attribution_list_LC[item_idx] - attribution_list_CVC[item_idx]], cmap='inferno', clim=[0, 2.0])
         ax.set_yticks([])
         ax.set_xticks(ticks=np.arange(len(sequence_list[item_idx])), labels=list(sequence_list[item_idx]), fontsize=6, rotation=0)
-        ax.set_title(f'True HuProt score: {y_true_arr[item_idx]:.2f}, Pred HuProt score: {y_pred_arr[item_idx]:.2f}')
+        ax.set_title('LC - CVC')
+
+    indices = np.argsort(y_true_arr[:, 0])[:topk]
+    for row_idx, item_idx in enumerate(indices):
+        ax = fig.add_subplot(gs[topk * 2 + 1 + row_idx * 2, 0])
+        cbar_data = ax.imshow([attribution_list_LC[item_idx] - attribution_list_HC[item_idx]], cmap='inferno', clim=[0, 2.0])
+        ax.set_yticks([])
+        ax.set_xticks(ticks=np.arange(len(sequence_list[item_idx])), labels=list(sequence_list[item_idx]), fontsize=6, rotation=0)
+        ax.set_title(f'True HuProt score (LC|HC|CVC): {y_true_arr[item_idx, 0]:.2f}|{y_true_arr[item_idx, 1]:.2f}|{y_true_arr[item_idx, 2]:.2f}, ' + \
+                     f'Pred HuProt score (LC|HC|CVC): {y_pred_arr[item_idx, 0]:.2f}|{y_pred_arr[item_idx, 1]:.2f}|{y_pred_arr[item_idx, 2]:.2f}' + \
+                     '\nLC - HC')
+
+        ax = fig.add_subplot(gs[topk * 2 + 1 + row_idx * 2 + 1, 0])
+        cbar_data = ax.imshow([attribution_list_LC[item_idx] - attribution_list_CVC[item_idx]], cmap='inferno', clim=[0, 2.0])
+        ax.set_yticks([])
+        ax.set_xticks(ticks=np.arange(len(sequence_list[item_idx])), labels=list(sequence_list[item_idx]), fontsize=6, rotation=0)
+        ax.set_title('\nLC - CVC')
+
     ax_colorbar = fig.add_subplot(gs[:, 1])
     fig.colorbar(cbar_data, ax=ax_colorbar, orientation='vertical', aspect=90)
     ax_colorbar.set_axis_off()
@@ -349,21 +356,38 @@ def main(args):
     plt.close(fig)
 
     fig = plt.figure(figsize=(30, 15))
-    gs = plt.GridSpec(2 * topk + 1, 2, width_ratios=[95, 5])
-    indices = np.argsort(y_pred_arr)[-topk:][::-1]
+    gs = plt.GridSpec(4 * topk + 1, 2, width_ratios=[95, 5])
+    indices = np.argsort(y_pred_arr[:, 0])[-topk:][::-1]
     for row_idx, item_idx in enumerate(indices):
-        ax = fig.add_subplot(gs[row_idx, 0])
-        cbar_data = ax.imshow([attribution_list[item_idx]], cmap='inferno', clim=[0, 2.0])
+        ax = fig.add_subplot(gs[row_idx * 2, 0])
+        cbar_data = ax.imshow([attribution_list_LC[item_idx] - attribution_list_HC[item_idx]], cmap='inferno', clim=[0, 2.0])
         ax.set_yticks([])
         ax.set_xticks(ticks=np.arange(len(sequence_list[item_idx])), labels=list(sequence_list[item_idx]), fontsize=6, rotation=0)
-        ax.set_title(f'True HuProt score: {y_true_arr[item_idx]:.2f}, Pred HuProt score: {y_pred_arr[item_idx]:.2f}')
-    indices = np.argsort(y_pred_arr)[:topk]
-    for row_idx, item_idx in enumerate(indices):
-        ax = fig.add_subplot(gs[topk + 1 + row_idx, 0])
-        cbar_data = ax.imshow([attribution_list[item_idx]], cmap='inferno', clim=[0, 2.0])
+        ax.set_title(f'True HuProt score (LC|HC|CVC): {y_true_arr[item_idx, 0]:.2f}|{y_true_arr[item_idx, 1]:.2f}|{y_true_arr[item_idx, 2]:.2f}, ' + \
+                     f'Pred HuProt score (LC|HC|CVC): {y_pred_arr[item_idx, 0]:.2f}|{y_pred_arr[item_idx, 1]:.2f}|{y_pred_arr[item_idx, 2]:.2f}' + \
+                     '\nLC - HC')
+        ax = fig.add_subplot(gs[row_idx * 2 + 1, 0])
+        cbar_data = ax.imshow([attribution_list_LC[item_idx] - attribution_list_CVC[item_idx]], cmap='inferno', clim=[0, 2.0])
         ax.set_yticks([])
         ax.set_xticks(ticks=np.arange(len(sequence_list[item_idx])), labels=list(sequence_list[item_idx]), fontsize=6, rotation=0)
-        ax.set_title(f'True HuProt score: {y_true_arr[item_idx]:.2f}, Pred HuProt score: {y_pred_arr[item_idx]:.2f}')
+        ax.set_title('LC - CVC')
+
+    indices = np.argsort(y_pred_arr[:, 0])[:topk]
+    for row_idx, item_idx in enumerate(indices):
+        ax = fig.add_subplot(gs[topk * 2 + 1 + row_idx * 2, 0])
+        cbar_data = ax.imshow([attribution_list_LC[item_idx] - attribution_list_HC[item_idx]], cmap='inferno', clim=[0, 2.0])
+        ax.set_yticks([])
+        ax.set_xticks(ticks=np.arange(len(sequence_list[item_idx])), labels=list(sequence_list[item_idx]), fontsize=6, rotation=0)
+        ax.set_title(f'True HuProt score (LC|HC|CVC): {y_true_arr[item_idx, 0]:.2f}|{y_true_arr[item_idx, 1]:.2f}|{y_true_arr[item_idx, 2]:.2f}, ' + \
+                     f'Pred HuProt score (LC|HC|CVC): {y_pred_arr[item_idx, 0]:.2f}|{y_pred_arr[item_idx, 1]:.2f}|{y_pred_arr[item_idx, 2]:.2f}' + \
+                     '\nLC - HC')
+
+        ax = fig.add_subplot(gs[topk * 2 + 1 + row_idx * 2 + 1, 0])
+        cbar_data = ax.imshow([attribution_list_LC[item_idx] - attribution_list_CVC[item_idx]], cmap='inferno', clim=[0, 2.0])
+        ax.set_yticks([])
+        ax.set_xticks(ticks=np.arange(len(sequence_list[item_idx])), labels=list(sequence_list[item_idx]), fontsize=6, rotation=0)
+        ax.set_title('\nLC - CVC')
+
     ax_colorbar = fig.add_subplot(gs[:, 1])
     fig.colorbar(cbar_data, ax=ax_colorbar, orientation='vertical', aspect=90)
     ax_colorbar.set_axis_off()
@@ -375,7 +399,9 @@ def main(args):
     # Save the data.
     df = pd.DataFrame({
         'Sequence': sequence_list,
-        'Attribution': attribution_list,
+        'Attribution_LC': attribution_list_LC,
+        'Attribution_HC': attribution_list_HC,
+        'Attribution_CVC': attribution_list_CVC,
         'HuProt_true': y_true_arr,
         'HuProt_pred': y_pred_arr,
     })

@@ -129,7 +129,6 @@ def main(args):
         'val_loss_epoch': 'min',
         'val_pearson_R': 'max',
         'val_spearman_R': 'max',
-        'val_recon_acc': 'max',
     }
 
     if mode_mapper[args.model_saving_metric] == 'min':
@@ -165,8 +164,8 @@ def main(args):
             attention_rolled = attention_rollout(attentions, use_grad=True)
             final_attribution = torch.sum(attention_rolled, dim=-1)
             # Drop START and END tokens.
-            final_attribution = final_attribution[1:-1]
-            L1_penalty = final_attribution.abs().mean()
+            final_attribution = final_attribution[:, 1:-1]
+            L1_penalty = torch.abs(final_attribution).mean()
             loss += args.L1_coeff * L1_penalty
             train_loss += loss.item()
 
@@ -191,7 +190,7 @@ def main(args):
         spearman_R = spearmanr(a=y_true_arr, b=y_pred_arr)[0]
         scheduler.step()
 
-        log('Train [%s/%s] loss (recon): %.3f, P.R: %.3f, S.R: %.3f'
+        log('Train [%s/%s] loss: %.3f, P.R: %.3f, S.R: %.3f'
             % (epoch_idx + 1, args.n_epochs, train_loss, pearson_R, spearman_R),
             filepath=args.log_dir,
             to_console=False)
@@ -219,8 +218,8 @@ def main(args):
                 attention_rolled = attention_rollout(attentions)
                 final_attribution = torch.sum(attention_rolled, dim=-1)
                 # Drop START and END tokens.
-                final_attribution = final_attribution[1:-1]
-                L1_penalty = final_attribution.abs().mean()
+                final_attribution = final_attribution[:, 1:-1]
+                L1_penalty = torch.abs(final_attribution).mean()
                 loss += args.L1_coeff * L1_penalty
                 val_loss += loss.item()
 
@@ -235,7 +234,7 @@ def main(args):
             pearson_R = pearsonr(y_true_arr, y_pred_arr)[0]
             spearman_R = spearmanr(a=y_true_arr, b=y_pred_arr)[0]
 
-            log('Validation [%s/%s] loss (recon): %.3f, P.R: %.3f, S.R: %.3f'
+            log('Validation [%s/%s] loss: %.3f, P.R: %.3f, S.R: %.3f'
                 % (epoch_idx + 1, args.n_epochs, val_loss, pearson_R, spearman_R),
                 filepath=args.log_dir,
                 to_console=False)
@@ -297,7 +296,7 @@ def main(args):
 
             loss = loss_fn_pred(y_pred.flatten(), y_true.flatten())
             # Additional L1 penalty.
-            L1_penalty = final_attribution.abs().mean()
+            L1_penalty = np.abs(final_attribution).mean()
             loss += args.L1_coeff * L1_penalty
             test_loss += loss.item()
 
@@ -312,7 +311,7 @@ def main(args):
         pearson_R, pearson_P = pearsonr(y_true_arr, y_pred_arr)
         spearman_R, spearman_P = spearmanr(a=y_true_arr, b=y_pred_arr)
 
-        log('Test loss (recon): %.3f, P.R: %.3f, S.R: %.3f' % (
+        log('Test loss: %.3f, P.R: %.3f, S.R: %.3f' % (
             test_loss, pearson_R, spearman_R),
             filepath=args.log_dir,
             to_console=False)
