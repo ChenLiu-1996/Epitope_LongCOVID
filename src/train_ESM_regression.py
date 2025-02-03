@@ -401,8 +401,12 @@ def main(args):
         'Attribution_LC': attribution_list_LC,
         'Attribution_HC': attribution_list_HC,
         'Attribution_CVC': attribution_list_CVC,
-        'HuProt_true': y_true_arr,
-        'HuProt_pred': y_pred_arr,
+        'HuProt_true_LC': y_true_arr[:, 0],
+        'HuProt_pred_LC': y_pred_arr[:, 0],
+        'HuProt_true_HC': y_true_arr[:, 1],
+        'HuProt_pred_HC': y_pred_arr[:, 1],
+        'HuProt_true_CVC': y_true_arr[:, 2],
+        'HuProt_pred_CVC': y_pred_arr[:, 2],
     })
 
     df.to_csv(os.path.join(args.save_folder, 'data.csv'), index=False)
