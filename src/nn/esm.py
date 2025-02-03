@@ -102,7 +102,8 @@ class ESM(torch.nn.Module):
 
 
 def attention_rollout(attentions, discard_ratio=0.95, head_fusion='max'):
-    result = torch.eye(attentions[0].size(-1))
+    device = attentions[0].device
+    result = torch.eye(attentions[0].size(-1)).to(device)
     with torch.no_grad():
         for attention in attentions:
             if head_fusion == "mean":
@@ -120,7 +121,7 @@ def attention_rollout(attentions, discard_ratio=0.95, head_fusion='max'):
             indices = indices[indices != 0]
             flat[0, indices] = 0
 
-            I = torch.eye(attention_heads_fused.size(-1))
+            I = torch.eye(attention_heads_fused.size(-1)).to(device)
             a = (attention_heads_fused + 1.0 * I) / 2
             a = a / a.sum(dim=-1)
 
