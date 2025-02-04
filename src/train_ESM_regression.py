@@ -143,6 +143,8 @@ def main(args):
                 y_true_arr = np.vstack((y_true_arr, y_true.detach().cpu().numpy()))
                 y_pred_arr = np.vstack((y_pred_arr, y_pred.detach().cpu().numpy()))
 
+            del y_true, y_pred
+
         train_loss = train_loss / num_train_samples
         scheduler.step()
 
@@ -186,6 +188,8 @@ def main(args):
                 else:
                     y_true_arr = np.vstack((y_true_arr, y_true.detach().cpu().numpy()))
                     y_pred_arr = np.vstack((y_pred_arr, y_pred.detach().cpu().numpy()))
+
+                del y_true, y_pred
 
             val_loss = val_loss / num_val_samples
 
@@ -243,6 +247,7 @@ def main(args):
             continue
         num_test_samples += 1
 
+        y_pred = model(sequence)
         token_attribution = model.output_attribution(sequence)
         assert model.num_classes == token_attribution.shape[0]
         # Drop START and END tokens.
@@ -263,6 +268,8 @@ def main(args):
         else:
             y_true_arr = np.vstack((y_true_arr, y_true.detach().cpu().numpy()))
             y_pred_arr = np.vstack((y_pred_arr, y_pred.detach().cpu().numpy()))
+
+        del y_true, y_pred
 
     test_loss = test_loss / num_test_samples
 
